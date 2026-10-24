@@ -1,0 +1,58 @@
+{
+  "name": "agentmanager",
+  "version": "1.0.0",
+  "description": "Run background coding agents (Claude Code, Codex) per intent, and keep track of them from a web UI, your phone or the CLI",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "codex",
+    "ai-agents",
+    "coding-agents",
+    "agent-manager",
+    "cli"
+  ],
+  "homepage": "https://github.com/jdmunta/agentmanager-core#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jdmunta/agentmanager-core.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jdmunta/agentmanager-core/issues"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "agentmgr": "bin/agentmgr.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "public",
+    "scripts",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "start": "node bin/agentmgr.js serve",
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "postinstall": "node scripts/fix-pty.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "commander": "^15.0.0",
+    "dompurify": "^3.4.16",
+    "express": "^5.2.1",
+    "marked": "^18.0.14",
+    "mermaid": "^11.17.2",
+    "node-pty": "^1.1.0",
+    "qrcode": "^1.5.4",
+    "ws": "^8.22.0"
+  }
+}

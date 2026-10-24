@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Git identity for the test repos
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.com"
+          git config --global init.defaultBranch main
+      - run: npm ci
+      - name: Tests
+        run: npm test
+        env:
+          # Ubuntu 23.10+ runners restrict user namespaces, so Chrome's sandbox can't start there.
+          AGENTMGR_TEST_NO_SANDBOX: ${{ runner.os == 'Linux' && '1' || '0' }}
+
+  package:
+    name: npm package installs and runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm pack
+      - name: Install the packed tarball globally and start the daemon
+        run: |
+          npm i -g ./agentmanager-*.tgz
+          agentmgr --version
+          export AGENTMGR_HOME="$RUNNER_TEMP/agentmgr" AGENTMGR_PORT=4799
+          agentmgr serve > "$RUNNER_TEMP/serve.log" 2>&1 &
+          for i in $(seq 1 20); do curl -sf -o /dev/null http://127.0.0.1:4799/ && break; sleep 1; done
+          curl -sf -o /dev/null http://127.0.0.1:4799/
+          agentmgr ls
+          agentmgr shutdown
