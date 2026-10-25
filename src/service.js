@@ -35,15 +35,17 @@ function command() {
   return [shell, '-l', '-i', '-c', `exec ${q(nodePath())} ${q(BIN)} serve`];
 }
 
-function passEnv() {
+// Settings that change which daemon runs, or what it loads (plugins from a wrapper such as an
+// enterprise package), carry over to the service.
+export function passEnv(source = process.env) {
   const env = {};
-  for (const key of ['AGENTMGR_HOME', 'AGENTMGR_PORT']) if (process.env[key]) env[key] = process.env[key];
+  for (const key of ['AGENTMGR_HOME', 'AGENTMGR_PORT', 'AGENTMGR_PLUGINS', 'AGENTMGR_HUB_PLUGINS']) if (source[key]) env[key] = source[key];
   return env;
 }
 
 const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function plist() {
+export function plist() {
   const env = passEnv();
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -69,7 +71,7 @@ ${Object.entries(env).map(([k, v]) => `    <key>${xml(k)}</key><string>${xml(v)}
 `;
 }
 
-function unit() {
+export function unit() {
   const env = Object.entries(passEnv()).map(([k, v]) => `Environment=${k}=${v}\n`).join('');
   const cmd = command().map((a) => `"${a.replace(/(["\\])/g, '\\$1')}"`).join(' ');
   return `[Unit]

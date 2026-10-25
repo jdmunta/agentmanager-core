@@ -1273,7 +1273,7 @@ function renderDetail() {
           <select class="prio-select p${a.priority ?? 2}" data-priority="${a.id}" title="Priority: P0 most urgent … P3 lowest">
             ${[0, 1, 2, 3].map((p) => `<option value="${p}" ${p === (a.priority ?? 2) ? 'selected' : ''}>P${p}</option>`).join('')}
           </select>
-          ${esc(a.name)} <span class="pill ${st}">${pillText(st)}</span>${a.kind === 'general' ? ' <span class="tag">general</span>' : ''}</h2>
+          <span class="d-name">${esc(a.name)}</span> <span class="pill ${st}">${pillText(st)}</span>${a.kind === 'general' ? ' <span class="tag">general</span>' : ''}</h2>
         <p class="intent">${esc(a.intent || (a.kind === 'general' ? 'General session: ask Claude anything in the terminal.' : ''))}</p>
       </div>
       <div class="d-actions">
