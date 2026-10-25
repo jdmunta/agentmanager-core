@@ -7,6 +7,7 @@ import { repoNameFromUrl, isRemoteUrl } from '../src/git.js';
 import { slugify } from '../src/manager.js';
 import { STATE_VERSION, Store } from '../src/store.js';
 import { claudeProjectDir, extractRefs, scanTranscript } from '../src/tracker.js';
+import { passEnv, plist, unit } from '../src/service.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-unit-'));
 
@@ -584,3 +585,16 @@ test('engines: Antigravity adapter reads real agy 1.4.3 output (fixtures)', asyn
   assert.match(help, /accept-edits, auto, plan/);
 });
 
+
+test('login service carries the home, port and plugin settings', () => {
+  assert.deepEqual(passEnv({ AGENTMGR_PLUGINS: '/opt/ent/daemon.js', AGENTMGR_PORT: '4800', OTHER: 'x' }), { AGENTMGR_PORT: '4800', AGENTMGR_PLUGINS: '/opt/ent/daemon.js' });
+  const saved = process.env.AGENTMGR_PLUGINS;
+  process.env.AGENTMGR_PLUGINS = '/opt/ent/daemon.js';
+  try {
+    assert.match(plist(), /<key>AGENTMGR_PLUGINS<\/key><string>\/opt\/ent\/daemon\.js<\/string>/);
+    assert.match(unit(), /^Environment=AGENTMGR_PLUGINS=\/opt\/ent\/daemon\.js$/m);
+  } finally {
+    if (saved === undefined) delete process.env.AGENTMGR_PLUGINS;
+    else process.env.AGENTMGR_PLUGINS = saved;
+  }
+});

@@ -10,6 +10,9 @@
 - **Upgrades:** the state file is versioned, backed up at startup, migrated with a backup, and never overwritten by an older version.
 - **Plugins:** policies that can refuse actions, audit listeners, extra API routes and engines on the daemon; sign-in methods, request policies and audit on the hub ([docs/plugins.md](docs/plugins.md)).
 - **Packaging:** `npm i -g agentmanager`, `agentmgr --version`.
+- **Installer:** the site's `install.sh` puts the program in `~/.local/share/agentmanager` and never touches `~/.agentmanager`, where your agents and workspaces live. It used to replace that folder.
+- **Start at login:** `agentmgr service install` keeps `AGENTMGR_PLUGINS` and `AGENTMGR_HUB_PLUGINS`.
+- **UI:** long agent names stay on one line, with the buttons below.
 - **Project:** CI on macOS and Linux, SECURITY.md, CONTRIBUTING.md, code of conduct, architecture notes.
 
 ## 0.5.0 (2026-10-23)
