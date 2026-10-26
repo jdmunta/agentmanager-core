@@ -4,6 +4,8 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 
 ![Agents grouped by project, with an agent's brief: results, problem, solution, a flow diagram and checks](docs/images/agents.jpg)
 
+![The conflict radar: two agents changed the same lines of README.md, with a suggested order to land them](docs/images/conflict-radar.jpg)
+
 - **Intents in, agents out.** Give one intent or a list (one per line). Each becomes its own `claude` process.
 - **Repo or folder.** Give a git URL (cloned once, then each agent gets its own worktree and branch) or a local folder.
   - **Fast clones.** URLs are cloned as partial clones (`--filter=blob:none`): history now, file contents only for what's checked out.
