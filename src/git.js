@@ -278,9 +278,9 @@ export async function changes(dir, baseSha) {
 }
 
 const SNAPSHOT_ENV = {
-  GIT_AUTHOR_NAME: 'Agent Manager',
+  GIT_AUTHOR_NAME: 'AI Agent Manager',
   GIT_AUTHOR_EMAIL: 'agentmgr@localhost',
-  GIT_COMMITTER_NAME: 'Agent Manager',
+  GIT_COMMITTER_NAME: 'AI Agent Manager',
   GIT_COMMITTER_EMAIL: 'agentmgr@localhost',
 };
 

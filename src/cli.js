@@ -879,7 +879,7 @@ export async function main(argv) {
       }
     });
 
-  const remoteCmd = program.command('remote').description('Open Agent Manager from a phone or another computer on the same network');
+  const remoteCmd = program.command('remote').description('Open AI Agent Manager from a phone or another computer on the same network');
   const printRemote = async (st, { qr = true } = {}) => {
     if (!st.enabled || !st.running) return console.log(`remote access ${dim('off')}  (turn on: agentmgr remote on)`);
     console.log(`remote access ${green('on')}  HTTPS port ${st.port}`);

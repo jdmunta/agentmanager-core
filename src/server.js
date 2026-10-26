@@ -338,7 +338,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post(
     '/notify/test',
     wrap(async () => {
-      await sendSlack(':wave: Test from Agent Manager: alerts will arrive here when an agent needs you.', loadNotify());
+      await sendSlack(':wave: Test from AI Agent Manager: alerts will arrive here when an agent needs you.', loadNotify());
       return { ok: true };
     }),
   );

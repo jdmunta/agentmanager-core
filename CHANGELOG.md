@@ -2,6 +2,7 @@
 
 ## 1.0.1 (unreleased)
 
+- **Name:** the product is now called **AI Agent Manager**, matching the `ai-agentmanager` package. The command is still `agentmgr`.
 - **About:** the version next to the title opens an About box with the release date, author, license, links and this daemon's details; **Check for updates** asks npm for the newest version. `agentmgr about` (`--check`) in a terminal.
 - **Dependencies:** DOMPurify 3.4.17, body-parser 2.4.0, Mermaid 12.
 

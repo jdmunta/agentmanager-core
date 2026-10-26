@@ -28,7 +28,7 @@ const repoUrl = (r) => String((typeof r === 'string' ? r : r?.url) ?? '').replac
 
 export function about({ port, config = {} } = {}) {
   return {
-    product: 'Agent Manager',
+    product: 'AI Agent Manager',
     package: pkg.name,
     command: Object.keys(pkg.bin ?? {})[0] ?? null,
     version: pkg.version,

@@ -1,6 +1,6 @@
 # Architecture
 
-Agent Manager is one long-running **daemon** per machine. It owns every agent's terminal and state. The **web UI** and the **CLI** are clients of its HTTP and WebSocket API. Optionally, daemons on several machines connect out to a **hub**.
+AI Agent Manager is one long-running **daemon** per machine. It owns every agent's terminal and state. The **web UI** and the **CLI** are clients of its HTTP and WebSocket API. Optionally, daemons on several machines connect out to a **hub**.
 
 ```
  browser (UI) ──┐                       ┌── claude / codex / agy in PTYs (one per agent, plus shells)

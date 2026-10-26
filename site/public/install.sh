@@ -1,5 +1,5 @@
 #!/bin/sh
-# Agent Manager installer: curl -fsSL <site>/install.sh | sh
+# AI Agent Manager installer: curl -fsSL <site>/install.sh | sh
 set -eu
 BASE=${AGENTMGR_BASE:-__BASE__}
 # The program goes here. Agents, workspaces and settings live in ~/.agentmanager (or
@@ -19,7 +19,7 @@ case "$os-$arch" in
   *) echo "Unsupported platform: $os $arch. Install from source: npm install && npm link" >&2; exit 1 ;;
 esac
 
-echo "Downloading Agent Manager ($t)..."
+echo "Downloading AI Agent Manager ($t)..."
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 curl -fL --progress-bar "$BASE/downloads/agentmanager-$t.tar.gz" -o "$tmp/am.tar.gz"
 tar -xzf "$tmp/am.tar.gz" -C "$tmp"
@@ -32,5 +32,5 @@ ln -sf "$PREFIX/bin/agentmgr" "$BIN_DIR/agentmgr"
 
 echo "Installed agentmgr -> $BIN_DIR/agentmgr"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "Add to your PATH:  export PATH=\"$BIN_DIR:\$PATH\"" ;; esac
-command -v claude >/dev/null 2>&1 || echo "Note: Agent Manager drives the Claude Code CLI. Install it: https://claude.com/claude-code"
+command -v claude >/dev/null 2>&1 || echo "Note: AI Agent Manager drives the Claude Code CLI. Install it: https://claude.com/claude-code"
 echo "Start it:  agentmgr ui"

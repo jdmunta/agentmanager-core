@@ -1,4 +1,4 @@
-// Plugins: how a separate package extends Agent Manager without changing it. A plugin is an
+// Plugins: how a separate package extends AI Agent Manager without changing it. A plugin is an
 // ES module listed in config.json "plugins" (the daemon) or AGENTMGR_HUB_PLUGINS (the hub),
 // whose default export (or `register`) receives the API below:
 //

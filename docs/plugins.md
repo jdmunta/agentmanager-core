@@ -1,6 +1,6 @@
 # Plugins
 
-A plugin extends Agent Manager from a separate package, without changing its code: add policies that can refuse actions, listen to what happens (for an audit trail), serve extra API routes, add an agent engine, or (on the hub) add a sign-in method.
+A plugin extends AI Agent Manager from a separate package, without changing its code: add policies that can refuse actions, listen to what happens (for an audit trail), serve extra API routes, add an agent engine, or (on the hub) add a sign-in method.
 
 ## Loading
 
@@ -10,7 +10,7 @@ A plugin extends Agent Manager from a separate package, without changing its cod
 { "plugins": ["@acme/agentmanager-policy", "./plugins/audit.js"] }
 ```
 
-Package names are resolved from Agent Manager's install; paths are relative to `~/.agentmanager` (`~` works too).
+Package names are resolved from AI Agent Manager's install; paths are relative to `~/.agentmanager` (`~` works too).
 
 **Hub:** `AGENTMGR_HUB_PLUGINS=@acme/agentmanager-sso,./plugins/hub-audit.js` (paths relative to the hub's state folder).
 

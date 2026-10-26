@@ -4,7 +4,7 @@ Status: phases 1–3 built (0.3, branch `v0.3-fleet`) · Phases 4–5: planned
 
 ## Problem
 
-Agent Manager runs every agent on the machine its daemon runs on. Once you have agents on more than one machine (a Mac mini that is always on, a laptop, a cloud VM with more cores, a teammate's box), you get one UI per machine, one inbox per machine, and a backlog that can't use spare capacity elsewhere. Overlaps between agents on different machines go unnoticed until merge time.
+AI Agent Manager runs every agent on the machine its daemon runs on. Once you have agents on more than one machine (a Mac mini that is always on, a laptop, a cloud VM with more cores, a teammate's box), you get one UI per machine, one inbox per machine, and a backlog that can't use spare capacity elsewhere. Overlaps between agents on different machines go unnoticed until merge time.
 
 ## Goals
 

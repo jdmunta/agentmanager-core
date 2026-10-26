@@ -269,7 +269,7 @@ export class Notifier {
     const link = this.linkFor(agent.id);
     const intent = n.includeIntent && agent.intent ? `\n> ${agent.intent.replace(/\s+/g, ' ').slice(0, 200)}` : '';
     const prio = agent.priority <= 1 ? `[P${agent.priority}] ` : '';
-    const text = `${icon} ${prio ? `*${prio.trim()}* ` : ''}*${agent.name}*${project} ${what}${intent}${link ? `\n<${link}|Open in Agent Manager>` : ''}`;
+    const text = `${icon} ${prio ? `*${prio.trim()}* ` : ''}*${agent.name}*${project} ${what}${intent}${link ? `\n<${link}|Open in AI Agent Manager>` : ''}`;
     const plain = `${icon} ${prio}${agent.name}${project} ${what.replace(/\*/g, '')}${intent}${link ? `\nOpen: ${link}` : ''}`;
     sendSlack(text, n, plain)
       .then(() => this.record(kind, agent, null, urgency))

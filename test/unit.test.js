@@ -102,7 +102,7 @@ test('Store refuses state from a newer version and keeps a startup backup', () =
   new Store(file);
   assert.equal(JSON.parse(fs.readFileSync(`${file}.bak`, 'utf8')).agents.abc123.name, 'alpha', 'copy as it was at startup');
   fs.writeFileSync(file, JSON.stringify({ version: STATE_VERSION + 1, agents: {} }));
-  assert.throws(() => new Store(file), /newer Agent Manager/);
+  assert.throws(() => new Store(file), /newer AI Agent Manager/);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, STATE_VERSION + 1, 'left untouched');
   fs.writeFileSync(file, '{ broken');
   assert.throws(() => new Store(file), /state\.json\.bak/);

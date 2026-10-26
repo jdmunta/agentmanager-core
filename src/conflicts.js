@@ -95,11 +95,11 @@ export function conflictMessage(self, group) {
   const what = files ? `is changing the same files as you in this repository: ${files}.` : `is working on related code in this repository.`;
   const order =
     group.mergeFirst === self.id
-      ? `Agent Manager suggests your change lands first; ${group.agent.name} will rebase onto it.`
-      : `Agent Manager suggests ${group.agent.name}'s change lands first: when it does, rebase onto it and resolve the overlap.`;
+      ? `AI Agent Manager suggests your change lands first; ${group.agent.name} will rebase onto it.`
+      : `AI Agent Manager suggests ${group.agent.name}'s change lands first: when it does, rebase onto it and resolve the overlap.`;
   const ai = group.ai?.reason ? ` Why this matters: ${group.ai.reason}${group.ai.advice ? ` ${group.ai.advice}` : ''}` : '';
   return (
-    `Heads-up from Agent Manager: another agent, ${group.agent.name}, ${what} ${order}${ai} ` +
+    `Heads-up from AI Agent Manager: another agent, ${group.agent.name}, ${what} ${order}${ai} ` +
     `Keep your edits in those files focused, avoid unrelated reformatting there, and mention the overlap in your PR description.`
   );
 }

@@ -9,7 +9,7 @@ $('#print').onclick = () => window.print();
 
 async function main() {
   const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, { credentials: 'same-origin' });
-  if (!res.ok) throw new Error(res.status === 401 ? 'Sign in to Agent Manager first, then reopen this page.' : `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(res.status === 401 ? 'Sign in to AI Agent Manager first, then reopen this page.' : `HTTP ${res.status}`);
   const a = await res.json();
   const d = a.docs?.[kind];
   if (!d?.markdown) throw new Error('This document has not been written yet.');

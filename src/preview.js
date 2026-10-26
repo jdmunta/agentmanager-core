@@ -4,7 +4,7 @@
 // On this computer the tab loads the URL directly. From another device each site gets its
 // own HTTPS listener (same certificate and sign-in as remote access) that relays everything
 // to it at the root path, so apps that use absolute paths, redirects and WebSockets (hot
-// reload) keep working. This daemon's own ports are never relayed, and the Agent Manager
+// reload) keep working. This daemon's own ports are never relayed, and the AI Agent Manager
 // session cookie is stripped before forwarding.
 import http from 'node:http';
 import https from 'node:https';
@@ -170,7 +170,7 @@ export class Previews {
     const tport = targetPort(url);
     const own = new Set([...this.reserved(), ...[...this.listeners.values()].map((l) => l.port)]);
     const self = isLoopback(url) || this.ownHosts().has(url.hostname.replace(/^\[|\]$/g, '').toLowerCase());
-    if (self && own.has(tport)) throw Object.assign(new Error("That is Agent Manager's own port"), { status: 400 });
+    if (self && own.has(tport)) throw Object.assign(new Error("That is AI Agent Manager's own port"), { status: 400 });
     const key = `${url.protocol}//${url.hostname}:${tport}`;
     const existing = this.listeners.get(key);
     if (existing) return existing.port;
@@ -223,13 +223,13 @@ export class Previews {
     const cookies = req.headers.cookie ?? '';
     const until = this.okCookies.get(cookies);
     if (until && until > Date.now()) return null;
-    if (!this.signedIn(cookies)) return [401, 'Sign in to Agent Manager on this machine first, then open this tab again.'];
+    if (!this.signedIn(cookies)) return [401, 'Sign in to AI Agent Manager on this machine first, then open this tab again.'];
     if (this.okCookies.size > 100) this.okCookies.clear();
     this.okCookies.set(cookies, Date.now() + 10_000);
     return null;
   }
 
-  /** Request headers as the local server expects them: its own Host and Origin, no Agent Manager cookie. */
+  /** Request headers as the local server expects them: its own Host and Origin, no AI Agent Manager cookie. */
   forwardHeaders(entry, req, upgrade) {
     const { target } = entry;
     const self = `${target.protocol}//${target.label}`;

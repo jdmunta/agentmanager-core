@@ -75,7 +75,7 @@ export function unit() {
   const env = Object.entries(passEnv()).map(([k, v]) => `Environment=${k}=${v}\n`).join('');
   const cmd = command().map((a) => `"${a.replace(/(["\\])/g, '\\$1')}"`).join(' ');
   return `[Unit]
-Description=Agent Manager daemon (background Claude Code agents)
+Description=AI Agent Manager daemon (background Claude Code agents)
 
 [Service]
 ExecStart=${cmd}

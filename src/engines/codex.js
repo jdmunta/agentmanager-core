@@ -155,7 +155,7 @@ export default {
 
   /** Full arguments for a launch. Codex takes options after `resume`, and instructions only as text. */
   launchArgs({ extra = [], permissionMode, model, writableDir, instructions, sessionId, resume, prompt }) {
-    // Inline mode keeps the conversation in the terminal's scrollback, which Agent Manager replays.
+    // Inline mode keeps the conversation in the terminal's scrollback, which AI Agent Manager replays.
     const opts = [...extra, '--no-alt-screen', ...(MODES[permissionMode] ?? MODES.default)];
     if (model) opts.push('--model', model);
     if (writableDir) opts.push('--add-dir', writableDir);

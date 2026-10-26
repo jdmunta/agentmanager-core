@@ -464,7 +464,7 @@ function resultsCard(a) {
   const [icon, label] = OUTCOME[r.outcome] ?? ['🔄', r.outcome];
   const item = (x, cls) => `<li class="${cls}">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${md(x.text).replace(/^<p>|<\/p>\s*$/g, '')}</a>` : md(x.text).replace(/^<p>|<\/p>\s*$/g, '')}</li>`;
   return `<div class="results ${r.outcome.replace(' ', '-')}">
-    <h4>Results <span class="outcome">${icon} ${label}</span>${r.fromAgent ? '' : ' <span class="hint">(from what Agent Manager can see; the agent adds its own when it next updates its brief)</span>'}</h4>
+    <h4>Results <span class="outcome">${icon} ${label}</span>${r.fromAgent ? '' : ' <span class="hint">(from what AI Agent Manager can see; the agent adds its own when it next updates its brief)</span>'}</h4>
     ${r.blockers.length ? `<ul class="blockers">${r.blockers.map((x) => item(x, 'blocker')).join('')}</ul>` : ''}
     ${r.delivered.length ? `<ul class="delivered">${r.delivered.map((x) => item(x, 'delivered')).join('')}</ul>` : '<p class="hint">Nothing delivered yet.</p>'}
     ${r.notes ? `<div class="md">${md(r.notes)}</div>` : ''}
@@ -629,7 +629,7 @@ function projectGroups(list) {
 
 function renderList() {
   const waiting = [...agents.values()].filter((a) => a.runtime.attention).length;
-  document.title = waiting ? `(${waiting}) Agent Manager` : 'Agent Manager';
+  document.title = waiting ? `(${waiting}) AI Agent Manager` : 'AI Agent Manager';
   // "@cc" shows one project; any other text also matches shortcuts.
   const at = filterText.startsWith('@') ? filterText.slice(1) : null;
   const list = [...agents.values()].filter((a) =>
@@ -1995,7 +1995,7 @@ function renderImport() {
             .join('')}</div>`,
         )
         .join('')
-    : `<p class="hint">${importSessions.length ? 'Nothing matches.' : 'No Claude sessions started in a terminal in this period (Agent Manager\'s own agents are left out).'}</p>`;
+    : `<p class="hint">${importSessions.length ? 'Nothing matches.' : 'No Claude sessions started in a terminal in this period (AI Agent Manager\'s own agents are left out).'}</p>`;
   const picked = importSessions.filter((s) => importPicked.has(s.sessionId));
   const open = picked.filter((s) => s.inUse).length;
   Object.assign($('#import-go'), {
@@ -2562,8 +2562,8 @@ $('#detail-body').addEventListener('click', async (e) => {
       break;
     case 'delete': {
       const cancelNote = a.status === 'preparing' ? '\n\nThis also cancels the workspace setup (clone / checkout) in progress.' : '';
-      if (!confirm(`Delete agent "${a.name}"? Its session IDs will be forgotten by Agent Manager.${cancelNote}`)) return;
-      const del = a.worktree && confirm('Also remove the git worktree Agent Manager created for it?\n(Uncommitted changes there will be lost.)');
+      if (!confirm(`Delete agent "${a.name}"? Its session IDs will be forgotten by AI Agent Manager.${cancelNote}`)) return;
+      const del = a.worktree && confirm('Also remove the git worktree AI Agent Manager created for it?\n(Uncommitted changes there will be lost.)');
       act(async () => {
         const res = await api('DELETE', `/agents/${a.id}${del ? '?deleteWorkspace=1' : ''}`);
         if (res.warnings?.length) toast(res.warnings.join('; '), 6000);

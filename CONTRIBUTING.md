@@ -60,5 +60,5 @@ Signed-off-by: Your Name <you@example.com>
 
 1. Update `version` in `package.json` and `package-lock.json`, and date the release in `CHANGELOG.md`.
 2. Update the version in the README's install commands (`ai-agentmanager@1.0.0`, `--branch v1.0.0`).
-3. Merge to `main` with CI passing, then tag: `git tag -a v1.0.1 -m "Agent Manager 1.0.1" && git push origin v1.0.1`.
+3. Merge to `main` with CI passing, then tag: `git tag -a v1.0.1 -m "AI Agent Manager 1.0.1" && git push origin v1.0.1`.
 4. Create the GitHub Release from the changelog entry, and run `npm publish`.
