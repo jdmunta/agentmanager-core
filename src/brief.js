@@ -15,7 +15,7 @@ export function briefPath(agentId) {
 }
 
 export const briefPrompt = (file) =>
-  `Keep a short, living brief of this task in ${file} (Markdown). Agent Manager shows it to the user ` +
+  `Keep a short, living brief of this task in ${file} (Markdown). AI Agent Manager shows it to the user ` +
   'next to your terminal. Start it with one status line, then use exactly these four sections:\n' +
   'Status: planning | working | blocked | done\n' +
   'Set "done" only when the task is complete and its checks pass; set "blocked" when you need the user.\n' +

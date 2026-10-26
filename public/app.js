@@ -464,7 +464,7 @@ function resultsCard(a) {
   const [icon, label] = OUTCOME[r.outcome] ?? ['🔄', r.outcome];
   const item = (x, cls) => `<li class="${cls}">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${md(x.text).replace(/^<p>|<\/p>\s*$/g, '')}</a>` : md(x.text).replace(/^<p>|<\/p>\s*$/g, '')}</li>`;
   return `<div class="results ${r.outcome.replace(' ', '-')}">
-    <h4>Results <span class="outcome">${icon} ${label}</span>${r.fromAgent ? '' : ' <span class="hint">(from what Agent Manager can see; the agent adds its own when it next updates its brief)</span>'}</h4>
+    <h4>Results <span class="outcome">${icon} ${label}</span>${r.fromAgent ? '' : ' <span class="hint">(from what AI Agent Manager can see; the agent adds its own when it next updates its brief)</span>'}</h4>
     ${r.blockers.length ? `<ul class="blockers">${r.blockers.map((x) => item(x, 'blocker')).join('')}</ul>` : ''}
     ${r.delivered.length ? `<ul class="delivered">${r.delivered.map((x) => item(x, 'delivered')).join('')}</ul>` : '<p class="hint">Nothing delivered yet.</p>'}
     ${r.notes ? `<div class="md">${md(r.notes)}</div>` : ''}
@@ -629,7 +629,7 @@ function projectGroups(list) {
 
 function renderList() {
   const waiting = [...agents.values()].filter((a) => a.runtime.attention).length;
-  document.title = waiting ? `(${waiting}) Agent Manager` : 'Agent Manager';
+  document.title = waiting ? `(${waiting}) AI Agent Manager` : 'AI Agent Manager';
   // "@cc" shows one project; any other text also matches shortcuts.
   const at = filterText.startsWith('@') ? filterText.slice(1) : null;
   const list = [...agents.values()].filter((a) =>
@@ -1995,7 +1995,7 @@ function renderImport() {
             .join('')}</div>`,
         )
         .join('')
-    : `<p class="hint">${importSessions.length ? 'Nothing matches.' : 'No Claude sessions started in a terminal in this period (Agent Manager\'s own agents are left out).'}</p>`;
+    : `<p class="hint">${importSessions.length ? 'Nothing matches.' : 'No Claude sessions started in a terminal in this period (AI Agent Manager\'s own agents are left out).'}</p>`;
   const picked = importSessions.filter((s) => importPicked.has(s.sessionId));
   const open = picked.filter((s) => s.inUse).length;
   Object.assign($('#import-go'), {
@@ -2562,8 +2562,8 @@ $('#detail-body').addEventListener('click', async (e) => {
       break;
     case 'delete': {
       const cancelNote = a.status === 'preparing' ? '\n\nThis also cancels the workspace setup (clone / checkout) in progress.' : '';
-      if (!confirm(`Delete agent "${a.name}"? Its session IDs will be forgotten by Agent Manager.${cancelNote}`)) return;
-      const del = a.worktree && confirm('Also remove the git worktree Agent Manager created for it?\n(Uncommitted changes there will be lost.)');
+      if (!confirm(`Delete agent "${a.name}"? Its session IDs will be forgotten by AI Agent Manager.${cancelNote}`)) return;
+      const del = a.worktree && confirm('Also remove the git worktree AI Agent Manager created for it?\n(Uncommitted changes there will be lost.)');
       act(async () => {
         const res = await api('DELETE', `/agents/${a.id}${del ? '?deleteWorkspace=1' : ''}`);
         if (res.warnings?.length) toast(res.warnings.join('; '), 6000);
@@ -2729,6 +2729,61 @@ $('#new-form').addEventListener('submit', async (e) => {
 });
 
 // ------------------------------------------------------------------ ask (general session)
+
+// ---------------------------------------------------------------- about
+const aboutDialog = $('#about-dialog');
+let aboutInfo = null;
+async function loadAbout() {
+  aboutInfo = await api('GET', '/about');
+  $('#about-btn').textContent = `v${aboutInfo.version}`;
+  return aboutInfo;
+}
+loadAbout().catch(() => {});
+function renderAbout(a) {
+  const link = (url, text = url.replace(/^https:\/\//, '')) => `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>`;
+  const when = (iso) => new Date(iso).toLocaleString();
+  const rows = [
+    ['Version', `${esc(a.version)}${a.releaseDate ? ` <span class="hint">released ${esc(a.releaseDate)}</span>` : ''}`],
+    ['Author', esc(a.author ?? '—')],
+    ['License', esc(a.license ?? '—')],
+    ['Install', `<code>npm install -g ${esc(a.package)}</code>, then <code>${esc(a.command ?? 'agentmgr')}</code>`],
+    ['Code', a.links.repository ? link(a.links.repository) : '—'],
+    ['Releases', a.links.releases ? link(a.links.releases, 'Release notes') : '—'],
+    ['Report a problem', a.links.issues ? link(a.links.issues, 'GitHub issues') : '—'],
+    null,
+    ['Daemon', `pid ${esc(a.daemon.pid)} · port ${esc(a.daemon.port ?? '—')} · running since ${esc(when(a.daemon.startedAt))}`],
+    ['Data folder', `<code>${esc(a.daemon.home ?? '—')}</code>`],
+    ['Node.js', esc(a.daemon.node)],
+    ['System', esc(a.daemon.platform)],
+    ['Claude Code', `<code>${esc(a.daemon.claudeBin ?? 'claude')}</code>`],
+  ];
+  $('#about-list').innerHTML = rows.map((r) => (r ? `<dt>${r[0]}</dt><dd>${r[1]}</dd>` : '<div class="sep"></div>')).join('');
+}
+$('#about-btn').onclick = async () => {
+  $('#about-update').hidden = true;
+  if (aboutInfo) renderAbout(aboutInfo);
+  else $('#about-list').innerHTML = '<dt>Loading…</dt><dd></dd>';
+  aboutDialog.showModal();
+  try {
+    renderAbout(await loadAbout()); // fresh daemon details (uptime, pid) each time it opens
+  } catch (err) {
+    $('#about-list').innerHTML = `<dt>Error</dt><dd>${esc(err.message)}</dd>`;
+  }
+};
+$('#about-close').onclick = () => aboutDialog.close();
+$('#about-check').onclick = async () => {
+  const out = $('#about-update');
+  out.hidden = false;
+  out.textContent = 'Checking…';
+  try {
+    const r = await api('GET', '/about/latest');
+    out.innerHTML = r.newer
+      ? `Version ${esc(r.latest)} is available. Update with <code>npm install -g ${esc(aboutInfo?.package ?? 'ai-agentmanager')}@latest</code>, then <code>agentmgr restart</code>.`
+      : `You have the latest version (${esc(r.current)}).`;
+  } catch (err) {
+    out.textContent = `Couldn't check: ${err.message}`;
+  }
+};
 
 const askDialog = $('#ask-dialog');
 $('#ask-btn').onclick = () => {

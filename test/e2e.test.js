@@ -864,7 +864,7 @@ test('browser tabs: any address, saved per agent, suggested from terminal output
   const page = await httpsReq(pp, 'GET', '/x', { headers: { cookie: `${cookie}; app=1`, origin: `https://127.0.0.1:${pp}` } });
   assert.equal(page.status, 200);
   assert.match(page.text, /dev page \/x/);
-  assert.deepEqual(seen.at(-1), { url: '/x', host: `localhost:${tp}`, cookie: 'app=1', origin: `http://localhost:${tp}` }, 'the dev server never sees the Agent Manager cookie');
+  assert.deepEqual(seen.at(-1), { url: '/x', host: `localhost:${tp}`, cookie: 'app=1', origin: `http://localhost:${tp}` }, 'the dev server never sees the AI Agent Manager cookie');
   assert.equal(page.headers['x-frame-options'], undefined);
   assert.equal(page.headers['content-security-policy'].trim(), "script-src 'self'");
   assert.deepEqual(page.headers['set-cookie'], ['app=2; Path=/']);
@@ -1135,13 +1135,13 @@ test('Slack alerts: needs input after the delay, once per episode; review; setti
     assert.ok(!JSON.stringify(set).includes('/services/T/B/x'), 'webhook masked in responses');
     assert.equal((await call('POST', '/notify', { webhookUrl: 'ftp://nope' })).status, 400);
     assert.equal((await call('POST', '/notify/test')).status, 200);
-    await waitFor(() => got.some((m) => /Test from Agent Manager/.test(m.text)), 5000, 'test message');
+    await waitFor(() => got.some((m) => /Test from AI Agent Manager/.test(m.text)), 5000, 'test message');
 
     const [a] = (await call('POST', '/agents', { intent: 'Please #ask me', project: 'Alerts' })).body;
     await waitFor(() => got.some((m) => m.text.includes(a.name) && /needs input: Permission prompt/.test(m.text)), 15000, 'needs-input alert');
     const msg = got.find((m) => m.text.includes(a.name)).text;
     assert.match(msg, /\(Alerts\)/);
-    assert.match(msg, new RegExp(`#${a.id}/term\\|Open in Agent Manager`));
+    assert.match(msg, new RegExp(`#${a.id}/term\\|Open in AI Agent Manager`));
     await new Promise((r) => setTimeout(r, 6000));
     assert.equal(got.filter((m) => m.text.includes(a.name) && /needs input/.test(m.text)).length, 1, 'once per episode');
     await call('POST', `/agents/${a.id}/stop`);
@@ -1543,7 +1543,7 @@ test('live browser tabs: a real browser on this machine, streamed; clicks and ty
 
 test('terminal sessions: scanned (interactive ones only), continued as agents that resume the same conversation', async () => {
   const { transcriptPath } = await import('../src/tracker.js');
-  // Outside Agent Manager's home, like a project folder of your own.
+  // Outside AI Agent Manager's home, like a project folder of your own.
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'my-terminal-project-')));
   const write = (id, recs) => {
     const file = transcriptPath(dir, id);
@@ -1566,7 +1566,7 @@ test('terminal sessions: scanned (interactive ones only), continued as agents th
   assert.equal(s.branch, 'feature/x');
   assert.equal(s.cwd, dir);
   assert.ok(!found.some((x) => x.sessionId.startsWith('99999999')), 'headless runs are left out');
-  assert.ok(!found.some((x) => x.cwd.startsWith(home + '/workspaces')), "Agent Manager's own are left out");
+  assert.ok(!found.some((x) => x.cwd.startsWith(home + '/workspaces')), "AI Agent Manager's own are left out");
 
   const [r] = (await call('POST', '/sessions/import', { sessions: [sid] })).body;
   assert.ok(r.agentId, JSON.stringify(r));
@@ -2458,4 +2458,19 @@ test('hub plugins: their sign-in, request policies and audit', async () => {
   } finally {
     await hub.close();
   }
+});
+
+test('About: version, release date, author, license, links and this daemon', async () => {
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const { status, body: a } = await call('GET', '/about');
+  assert.equal(status, 200);
+  assert.equal(a.version, pkg.version);
+  assert.equal(a.package, pkg.name);
+  assert.equal(a.command, 'agentmgr');
+  assert.equal(a.license, 'Apache-2.0');
+  assert.ok(a.author, 'author is set in package.json');
+  assert.match(a.releaseDate ?? '', /^\d{4}-\d{2}-\d{2}$/, 'the current version has a dated changelog entry');
+  assert.match(a.links.repository, /^https:\/\/github\.com\//);
+  assert.equal(a.daemon.pid > 0, true);
+  assert.ok(a.daemon.home);
 });

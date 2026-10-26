@@ -1,4 +1,4 @@
-# Agent Manager
+# AI Agent Manager
 
 Run one background [Claude Code](https://claude.com/claude-code) agent per intent, and keep track of them from a web UI or the `agentmgr` CLI.
 
@@ -39,8 +39,9 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Shells next to each agent.** **Open shell** gives a terminal in the agent's folder for running commands by hand. **+ Shell** opens as many more as you need, each in its own tab.
 - **Browser tabs.** **+ Browser** opens a page as this machine sees it, in a tab next to the agent's terminals. That can be the agent's dev server on `localhost:5173`, a site on its network or VPN, or any address. Local addresses the agent prints are offered as suggestions. It works from your phone or laptop too (see below).
 - **Live browser.** Browser tabs run a real Chrome on this machine and stream it into the tab: you see its screen and your clicks, scrolling, typing and paste go back to it, from the laptop or the phone. Because the page runs here, `localhost` is this machine, sites that refuse to be framed load normally, and popups (a sign-in window) open as tabs of their own and come back when they close. Chrome (or Chromium, Brave, Edge; `browserBin` in config.json picks one) runs headless with its own profile in `~/.agentmanager/browser-profile`, so sign-ins are remembered; it starts on the first view and stops after 15 minutes with nobody watching. Downloads go to `~/Downloads/agentmanager`. A site that still refuses it as a bot may accept `"browserHeadless": false`, which runs Chrome with a real window on this machine's screen. On Linux where Chrome's sandbox can't start (containers, Ubuntu 23.10+ user-namespace restrictions) the tab says so; `"browserNoSandbox": true` runs it without the sandbox, at your own risk. **Lite** on the bar switches a tab to the frame mode (the page loads in your own browser; quicker for a dev server).
-- **CLI sign-in links.** When a terminal prints a sign-in link that returns to a port on this machine (`railway login`, `gh auth login --web`, `gcloud auth login`...), a bar above the terminal offers **Open sign-in**: the link opens in a live browser tab here, so the provider's redirect to `http://127.0.0.1:PORT/callback` reaches the waiting CLI by itself, from any device. It opens on its own if you just typed the command. Without a live browser, it opens a window on your device; from another device you then paste the address you land on (`127.0.0.1:PORT/callback…`) into the bar and Agent Manager delivers it to the CLI, only on the port the link named.
+- **CLI sign-in links.** When a terminal prints a sign-in link that returns to a port on this machine (`railway login`, `gh auth login --web`, `gcloud auth login`...), a bar above the terminal offers **Open sign-in**: the link opens in a live browser tab here, so the provider's redirect to `http://127.0.0.1:PORT/callback` reaches the waiting CLI by itself, from any device. It opens on its own if you just typed the command. Without a live browser, it opens a window on your device; from another device you then paste the address you land on (`127.0.0.1:PORT/callback…`) into the bar and AI Agent Manager delivers it to the CLI, only on the port the link named.
 - **Attach files and screenshots.** Drop files on the terminal, paste a screenshot, or use **📎 Attach**. The file is saved on the daemon's machine and its path is pasted into the terminal, which is how Claude Code picks up images and files.
+- **About.** The version next to the title opens the About box: release date, author, license, links, and how this daemon runs (data folder, port, Node.js, which `claude`). **Check for updates** asks npm for the newest version. In a terminal: `agentmgr about` (`--check` for updates).
 - **General sessions.** **Ask Claude** starts a session with no repo, folder or intent, for questions. It is tracked and resumable like any other agent.
 
 New in 0.2, for running many agents at once:
@@ -207,7 +208,7 @@ Every agent gets **its own worktree and its own branch** (`agent/<name>-<id>`) o
 
 ## Continue sessions started in a terminal
 
-**Import** (next to **Save now** in the agent list) lists the Claude Code sessions you started yourself with `claude` in a terminal on this machine, from the last 7, 30 or 90 days: grouped by folder, with title, first and last ask, branch, size and last activity. Headless runs (`claude -p`, the SDK) and Agent Manager's own agents are left out. Each one you pick becomes an agent in the same folder that continues the same conversation (`--resume`), with the brief, inbox, PRs and usage tracked from then on.
+**Import** (next to **Save now** in the agent list) lists the Claude Code sessions you started yourself with `claude` in a terminal on this machine, from the last 7, 30 or 90 days: grouped by folder, with title, first and last ask, branch, size and last activity. Headless runs (`claude -p`, the SDK) and AI Agent Manager's own agents are left out. Each one you pick becomes an agent in the same folder that continues the same conversation (`--resume`), with the brief, inbox, PRs and usage tracked from then on.
 
 A session still open in a terminal is marked **open in a terminal** (a running `claude` names it) or **maybe open** (a `claude` runs in that folder and the session was active minutes ago). Two places writing one conversation would mix it up, so those continue as a **copy** under a new session ID and the terminal keeps the original. For the same reason, an agent that follows a `/clear` to a new session never picks up a headless run or a session a terminal has open in its folder.
 
@@ -356,7 +357,7 @@ The **Results** card is the first thing in the Brief panel, and `agentmgr show` 
 - **Blockers first, in red.**
 - **What was delivered.**
 
-It combines what the agent wrote under `## Results` with what Agent Manager tracks itself:
+It combines what the agent wrote under `## Results` with what AI Agent Manager tracks itself:
 
 - PRs (with their state).
 - Failing checks.
@@ -463,7 +464,7 @@ The data set is small.
 
 ## Conflict radar
 
-For each agent with its own branch, Agent Manager works out which files and line ranges its branch changed since it branched, including uncommitted and new files. Agents working in the same repository (the same shared clone or source folder) that touch the same file are flagged:
+For each agent with its own branch, AI Agent Manager works out which files and line ranges its branch changed since it branched, including uncommitted and new files. Agents working in the same repository (the same shared clone or source folder) that touch the same file are flagged:
 
 - **same lines**: both edit the same region, within a few lines (likely a merge conflict). Only judged when both branched from the same commit.
 - **same file**: both edit the file, in different places.
@@ -509,7 +510,7 @@ Fixed rules are cheap but miss context: three identical failures can be a conver
 
 ## Checkpoints and forks
 
-At the end of each turn, Agent Manager snapshots the agent's working tree as a commit under `refs/agentmgr/<agent>/<n>`. This doesn't touch the agent's branch, index or files. It records how far the conversation had got alongside. The last 40 are kept (`maxCheckpoints`); deleting the agent removes them.
+At the end of each turn, AI Agent Manager snapshots the agent's working tree as a commit under `refs/agentmgr/<agent>/<n>`. This doesn't touch the agent's branch, index or files. It records how far the conversation had got alongside. The last 40 are kept (`maxCheckpoints`); deleting the agent removes them.
 
 **Fork** (or `agentmgr fork <agent> [-c n]`) creates a new agent:
 
@@ -608,7 +609,7 @@ Or use **Remote access** in the header of the UI on this computer.
 
 Agents run Claude Code by default. With OpenAI's Codex CLI installed (`npm i -g @openai/codex`, signed in), an agent can run Codex instead: `agentmgr add --engine codex …`, or the **Engine** picker in New agent (shown once a second engine is installed). Everything else works the same way: worktrees, the brief and questions, the inbox (Codex's approval menus included), token usage, stuck detection, PR tracking, Explain, the backlog and the hub. Codex records no cost, and planning while a repo clones and forks are Claude-only for now. Set `"engine": "codex"` in config.json to make it the default; `engines.codex.bin` points at another binary. On the hub, each machine reports the engines it has (`engine:codex`), so shared backlog work can ask for one. See [docs/engines.md](docs/engines.md).
 
-Google's **Antigravity CLI** (`agy`, signed in with your Google account) works the same way: `--engine antigravity`. It replaced Gemini CLI for personal Google accounts in June 2026. Agent Manager adopts the conversation agy starts, resumes it with `--conversation`, reads token usage, commands and file writes from its transcript, shows its permission menus (commands, file changes, access outside the folder) in the inbox, pre-trusts agent folders in agy's settings, and runs Explain in agy's print mode. agy asks before writing the brief too, unless the agent runs in `acceptEdits` mode. `engines.antigravity.bin` points at another binary.
+Google's **Antigravity CLI** (`agy`, signed in with your Google account) works the same way: `--engine antigravity`. It replaced Gemini CLI for personal Google accounts in June 2026. AI Agent Manager adopts the conversation agy starts, resumes it with `--conversation`, reads token usage, commands and file writes from its transcript, shows its permission menus (commands, file changes, access outside the folder) in the inbox, pre-trusts agent folders in agy's settings, and runs Explain in agy's print mode. agy asks before writing the brief too, unless the agent runs in `acceptEdits` mode. `engines.antigravity.bin` points at another binary.
 
 ## Several machines: the hub
 
@@ -697,8 +698,8 @@ Usage comes from the session transcripts and is refreshed every few seconds whil
 - **Open shell** (or `agentmgr shell <agent>`) starts `$SHELL -l` in the agent's working folder. It shows as a **Shell 1** tab next to the **Claude** tab in the terminal pane; **+ Shell** (or `agentmgr shell <agent> -n 2`) opens more, and **×** on a tab closes that shell. Shells live as long as the daemon and don't start Claude.
 - **+ Browser** opens a tab on an address: a port (`5173`), a local address (`localhost:3000/app`), something on the machine's network (`10.0.0.7:8080`, `staging.internal`) or any site (`example.com`, which defaults to https). Tabs are kept with the agent, so every device sees them, and **×** closes one.
   - **On this computer** the tab loads the address directly. Many public sites refuse to appear inside another page, so use **↗** for those.
-  - **From another device** (remote access), Agent Manager gives each site its own HTTPS port. That port relays to the site as the machine sees it, so you can check from your phone what the agent built or what the machine can reach. Absolute links, redirects and hot-reload WebSockets on the same site keep working, and the site's "don't show me in a frame" headers are dropped. A link or redirect to a different site leaves the relay.
-  - **Safety:** the relay serves only signed-in devices. It never relays to Agent Manager's own ports on any of the machine's addresses, and it removes Agent Manager's sign-in cookie before forwarding. Sites other than localhost must present a valid certificate. The relays close when remote access is turned off.
+  - **From another device** (remote access), AI Agent Manager gives each site its own HTTPS port. That port relays to the site as the machine sees it, so you can check from your phone what the agent built or what the machine can reach. Absolute links, redirects and hot-reload WebSockets on the same site keep working, and the site's "don't show me in a frame" headers are dropped. A link or redirect to a different site leaves the relay.
+  - **Safety:** the relay serves only signed-in devices. It never relays to AI Agent Manager's own ports on any of the machine's addresses, and it removes AI Agent Manager's sign-in cookie before forwarding. Sites other than localhost must present a valid certificate. The relays close when remote access is turned off.
   - If a tab stays blank on a device, open it once with **↗** and accept the certificate there.
 - **Ask Claude** (or `agentmgr ask`) creates a `general` agent. All general sessions share `~/.agentmanager/general`, so Claude's folder-trust prompt only appears the first time.
 
@@ -762,7 +763,7 @@ npm test    # unit tests + end-to-end daemon tests against a stub claude (test/f
 
 - How the code fits together: [docs/architecture.md](docs/architecture.md). Extending it from a separate package (policies, audit, routes, engines, hub sign-in): [docs/plugins.md](docs/plugins.md). How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md). Changes per release: [CHANGELOG.md](CHANGELOG.md).
 - Security model and how to report a problem privately: [SECURITY.md](SECURITY.md).
-- Agent Manager sends no telemetry.
-- Agent Manager runs the agent CLIs you install and sign in to (Claude Code, Codex, Antigravity) with your own accounts. Use them within your provider's terms.
+- AI Agent Manager sends no telemetry. The only request it makes on its own behalf is **Check for updates**, when you click it.
+- AI Agent Manager runs the agent CLIs you install and sign in to (Claude Code, Codex, Antigravity) with your own accounts. Use them within your provider's terms.
 - Maintained in spare time. Issues and pull requests are welcome; replies may take a few days.
 - Licensed under the [Apache License 2.0](LICENSE).

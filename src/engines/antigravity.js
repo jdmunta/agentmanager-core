@@ -14,7 +14,7 @@ import path from 'node:path';
 import { norm, tailOf } from '../stuck.js';
 import { extractRefs } from '../tracker.js';
 
-// ANTIGRAVITY_CLI_HOME is Agent Manager's own override (tests); agy itself always uses this folder.
+// ANTIGRAVITY_CLI_HOME is AI Agent Manager's own override (tests); agy itself always uses this folder.
 const home = () => process.env.ANTIGRAVITY_CLI_HOME || path.join(os.homedir(), '.gemini', 'antigravity-cli');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const transcript = (id) => path.join(home(), 'brain', id, '.system_generated', 'logs', 'transcript_full.jsonl');

@@ -1,4 +1,4 @@
-// The agent engines Agent Manager can run. Each agent records its engine; agents from
+// The agent engines AI Agent Manager can run. Each agent records its engine; agents from
 // before engines existed are Claude Code agents.
 import fs from 'node:fs';
 import path from 'node:path';

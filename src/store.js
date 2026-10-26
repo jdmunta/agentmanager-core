@@ -12,7 +12,7 @@ const MIGRATIONS = {};
  * so a crash mid-write never loses the session IDs.
  *
  * Upgrades: older files are copied to `<file>.v<N>.bak` and migrated one version at a time.
- * A file from a newer Agent Manager is refused rather than overwritten (downgrades would lose
+ * A file from a newer AI Agent Manager is refused rather than overwritten (downgrades would lose
  * fields). The file as it was at startup is kept as `<file>.bak`.
  */
 export class Store {
@@ -38,7 +38,7 @@ export class Store {
     }
     const version = Number(parsed.version ?? 1);
     if (version > STATE_VERSION) {
-      throw new Error(`${this.file} was written by a newer Agent Manager (state version ${version}; this one reads up to ${STATE_VERSION}). Upgrade Agent Manager, or restore a backup.`);
+      throw new Error(`${this.file} was written by a newer AI Agent Manager (state version ${version}; this one reads up to ${STATE_VERSION}). Upgrade AI Agent Manager, or restore a backup.`);
     }
     if (version < STATE_VERSION) {
       fs.copyFileSync(this.file, `${this.file}.v${version}.bak`);

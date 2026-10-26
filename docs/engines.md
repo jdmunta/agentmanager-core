@@ -2,7 +2,7 @@
 
 Status: phase 1, Codex and Antigravity built. Gemini CLI dropped: since June 18, 2026 it no longer serves personal Google accounts, and Antigravity CLI (`agy`, `src/engines/antigravity.js`, checked against 1.4.3, fixtures in `test/fixtures/antigravity/`) replaced it. 0.4 (branch `v0.4-engines`) · 2026-10-18. Targets the current releases of each CLI, checked in phase 1.
 
-Agent Manager runs every agent with Claude Code. If Anthropic has an outage, a rate limit hits, or prices change, every agent stops at once. Running agents on other engines as well makes the fleet resilient across providers, and lets each task use the engine that suits it.
+AI Agent Manager runs every agent with Claude Code. If Anthropic has an outage, a rate limit hits, or prices change, every agent stops at once. Running agents on other engines as well makes the fleet resilient across providers, and lets each task use the engine that suits it.
 
 ## Goals
 
@@ -14,7 +14,7 @@ Agent Manager runs every agent with Claude Code. If Anthropic has an outage, a r
 ## Non-goals
 
 - **Moving a live conversation between engines.** Conversations stay with their engine. A task can continue on another engine through a handoff (below), which carries the work but not the chat history.
-- **Editor-based agents** (Antigravity, Cursor, and so on). Agent Manager drives command-line agents in a terminal.
+- **Editor-based agents** (Antigravity, Cursor, and so on). AI Agent Manager drives command-line agents in a terminal.
 - **Running models directly through APIs.** Each engine keeps its own CLI, sign-in, tools and safety settings.
 
 ## What is Claude-specific today
@@ -91,9 +91,9 @@ Gemini CLI flags are checked against 0.64.0 (`test/fixtures/gemini/help-0.64.0.t
 
 ### Permission modes
 
-Agent Manager's three modes map to each engine's own approval settings. The hub's rule stays: no mode that skips all prompts can be started from the hub.
+AI Agent Manager's three modes map to each engine's own approval settings. The hub's rule stays: no mode that skips all prompts can be started from the hub.
 
-| Agent Manager | Claude Code | Codex CLI | Gemini CLI |
+| AI Agent Manager | Claude Code | Codex CLI | Gemini CLI |
 | --- | --- | --- | --- |
 | `default` (ask) | `default` | `--sandbox workspace-write --ask-for-approval on-request` (0.163 only has `on-request` and `never`) | `--approval-mode default` |
 | `acceptEdits` | `acceptEdits` | the same: edits inside the workspace never ask | `--approval-mode auto_edit` |
@@ -107,7 +107,7 @@ The brief and questions files are what make an agent reviewable from the inbox, 
 - **Instructions:** today they go in `--append-system-prompt`. Codex and Gemini have no per-launch system prompt flag, so the instructions go in the first message of a new session, and are repeated briefly on resume (in the resume message where the engine accepts one). Writing them into the repo's `AGENTS.md`/`GEMINI.md` is rejected: that would change the user's repo.
 - **Writing outside the repo:** Codex's sandbox only writes inside the workspace by default. Options, in order of preference:
   1. Allow the brief folder as an extra writable root (`--add-dir` or `writable_roots`).
-  2. Have the agent write `.agentmgr/BRIEF.md` inside its worktree, add `.agentmgr/` to the worktree's local git excludes (`.git/info/exclude` of the worktree, never the repo's `.gitignore`), and have Agent Manager read it from there.
+  2. Have the agent write `.agentmgr/BRIEF.md` inside its worktree, add `.agentmgr/` to the worktree's local git excludes (`.git/info/exclude` of the worktree, never the repo's `.gitignore`), and have AI Agent Manager read it from there.
 - **Parsing** (`parseBrief`, `parseQuestions`) is already engine-neutral.
 
 ### Usage, activity and stuck detection

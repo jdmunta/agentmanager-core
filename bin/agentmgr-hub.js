@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The hub on its own, for hosts without the rest of Agent Manager (Railway, a container).
+// The hub on its own, for hosts without the rest of AI Agent Manager (Railway, a container).
 // Locally, "agentmgr hub serve" does the same.
 import { startHub } from '../src/hub.js';
 

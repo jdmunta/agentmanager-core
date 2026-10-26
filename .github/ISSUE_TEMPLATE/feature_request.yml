@@ -1,5 +1,5 @@
 name: Feature request
-description: An idea that would make Agent Manager more useful
+description: An idea that would make AI Agent Manager more useful
 labels: [enhancement]
 body:
   - type: textarea

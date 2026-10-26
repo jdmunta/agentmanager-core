@@ -18,6 +18,7 @@ import { Previews, parseUrl } from './preview.js';
 import { LiveBrowser } from './livebrowser.js';
 import * as remote from './remote.js';
 import { Store } from './store.js';
+import { about, latestRelease } from './about.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -337,7 +338,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post(
     '/notify/test',
     wrap(async () => {
-      await sendSlack(':wave: Test from Agent Manager: alerts will arrive here when an agent needs you.', loadNotify());
+      await sendSlack(':wave: Test from AI Agent Manager: alerts will arrive here when an agent needs you.', loadNotify());
       return { ok: true };
     }),
   );
@@ -370,6 +371,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/agents/:id/waiting/dismiss', wrap((req) => manager.dismissWaiting(req.params.id)));
   api.post('/agents/:id/review', wrap((req) => manager.requestReview(req.params.id, { force: true })));
   api.post('/agents/:id/review/ack', wrap((req) => manager.ackReview(req.params.id, req.body?.action)));
+  api.get('/about', wrap(() => about({ port, config: { home: paths.home, claudeBin: config.claudeBin } })));
+  api.get('/about/latest', wrap(() => latestRelease()));
   api.get('/judge', wrap(() => manager.judge.status()));
   // On or off for this daemon, kept in config.json. The judge spends calls on your own engine plan.
   api.put('/judge', wrap((req) => {

@@ -1,4 +1,4 @@
-// Claude Code sessions started outside Agent Manager (a plain `claude` in a terminal), so they
+// Claude Code sessions started outside AI Agent Manager (a plain `claude` in a terminal), so they
 // can be continued here. Claude Code keeps each session as ~/.claude/projects/<cwd>/<id>.jsonl;
 // the start and end of each file say where it ran, its title, branch and first ask.
 import { execFileSync } from 'node:child_process';
@@ -85,7 +85,7 @@ export function runningClaude() {
 
 /**
  * Interactive Claude Code sessions from the last `days`, newest first, leaving out `known`
- * session IDs (Agent Manager's own) and anything run under `excludeDir` (its one-off calls and
+ * session IDs (AI Agent Manager's own) and anything run under `excludeDir` (its one-off calls and
  * workspaces). inUse: "open" when a running claude names the session, "maybe" when one runs in
  * its folder and the session was active in the last 10 minutes.
  */

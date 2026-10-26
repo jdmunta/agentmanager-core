@@ -297,7 +297,7 @@ export class AgentManager extends EventEmitter {
 
   /**
    * The end result / status / blockers for an agent: what the agent wrote under
-   * "## Results", plus what Agent Manager knows (PRs, checks, prompts, errors).
+   * "## Results", plus what AI Agent Manager knows (PRs, checks, prompts, errors).
    */
   results(agent, rt, prs) {
     const r = agent.brief?.results;
@@ -749,7 +749,7 @@ export class AgentManager extends EventEmitter {
    */
   start(ref, { fresh = false, sessionId } = {}) {
     const agent = this.mustGet(ref);
-    if (this.closing) throw Object.assign(new Error('Agent Manager is shutting down'), { status: 503 });
+    if (this.closing) throw Object.assign(new Error('AI Agent Manager is shutting down'), { status: 503 });
     const live = this.runtimes.get(agent.id);
     if (!live?.pty) {
       this.plugins.check('agent.start', { agent: this.auditView(agent), fresh });
@@ -1432,7 +1432,7 @@ export class AgentManager extends EventEmitter {
 
   // ------------------------------------------------- sessions started elsewhere
 
-  /** Claude Code sessions started outside Agent Manager (in a terminal), to continue here. */
+  /** Claude Code sessions started outside AI Agent Manager (in a terminal), to continue here. */
   scanSessions({ days = 30 } = {}) {
     const known = new Set(this.store.list().flatMap((a) => a.sessions.map((x) => x.id)));
     return scanClaudeSessions({ days: Math.max(1, Math.min(365, Number(days) || 30)), known, excludeDir: paths.home });

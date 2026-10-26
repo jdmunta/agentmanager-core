@@ -12,7 +12,7 @@ export const questionsPath = (agentId) => path.join(briefDir(agentId), QUESTIONS
 export const questionsPrompt = (file) =>
   `When you need a decision from the user that doesn't have to stop all your work (a choice between options, ` +
   `a preference, a missing detail), don't wait in the terminal: add it to ${file} and keep going on whatever you can ` +
-  'do meanwhile, using your best default. Agent Manager collects these into the user\'s inbox. One question per heading, ' +
+  'do meanwhile, using your best default. AI Agent Manager collects these into the user\'s inbox. One question per heading, ' +
   'never edit or remove earlier ones:\n' +
   '## <the question, one line>\n' +
   'Options: <option A> | <option B>   (optional)\n' +
