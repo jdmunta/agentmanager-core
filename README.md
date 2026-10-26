@@ -56,18 +56,38 @@ New in 0.2, for running many agents at once:
 
 Runs on macOS and Linux; on Windows, use WSL2. Requires Node 20+, `git`, and the `claude` CLI, signed in (run `claude` once). Optional: `gh` (authenticated) for PR discovery by branch and PR state, Chrome (or Chromium, Brave, Edge) for live browser tabs, and Codex (`npm i -g @openai/codex`) as a second engine.
 
+**Stable release (recommended).** Releases are tagged (`v1.0.0`, `v1.0.1`, …) and listed on the [Releases](https://github.com/jdmunta/agentmanager-core/releases) page, with changes in [CHANGELOG.md](CHANGELOG.md).
+
 ```sh
-npm install -g agentmanager
+npm install -g agentmanager           # the latest release
+npm install -g agentmanager@1.0.0     # or a specific one
 ```
 
-Or from the repository:
+Or from the repository, at a release tag:
+
+```sh
+git clone --branch v1.0.0 --depth 1 https://github.com/jdmunta/agentmanager-core.git
+cd agentmanager-core
+npm install
+npm link            # optional: puts `agentmgr` on your PATH
+```
+
+**Development version (`main`).** New features land on `main` first, before they're released, so it can be less stable.
 
 ```sh
 git clone https://github.com/jdmunta/agentmanager-core.git
 cd agentmanager-core
 npm install
-npm link            # optional: puts `agentmgr` on your PATH
+npm link
 ```
+
+**Updating.** Use the command for how you installed, then run `agentmgr restart`. Running agents pause briefly and resume.
+
+| Installed with | Update |
+| --- | --- |
+| npm | `npm install -g agentmanager@latest` |
+| A clone at a release tag | `git fetch --tags && git checkout v1.0.1 && npm install` (the tag you want) |
+| A clone of `main` | `git pull && npm install` |
 
 ## Quick start on a new computer
 
