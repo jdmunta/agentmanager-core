@@ -9,7 +9,7 @@
 - **Linux:** a clear message when Chrome's sandbox can't start; `browserNoSandbox` to run without it.
 - **Upgrades:** the state file is versioned, backed up at startup, migrated with a backup, and never overwritten by an older version.
 - **Plugins:** policies that can refuse actions, audit listeners, extra API routes and engines on the daemon; sign-in methods, request policies and audit on the hub ([docs/plugins.md](docs/plugins.md)).
-- **Packaging:** `npm i -g ai-agent-manager` (the command is `agentmgr`), `agentmgr --version`.
+- **Packaging:** `npm i -g ai-agentmanager` (the command is `agentmgr`), `agentmgr --version`.
 - **Installer:** the site's `install.sh` puts the program in `~/.local/share/agentmanager` and never touches `~/.agentmanager`, where your agents and workspaces live. It used to replace that folder.
 - **Start at login:** `agentmgr service install` keeps `AGENTMGR_PLUGINS` and `AGENTMGR_HUB_PLUGINS`.
 - **UI:** long agent names stay on one line, with the buttons below.
