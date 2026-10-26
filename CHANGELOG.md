@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 (unreleased)
+## 1.0.0 (2026-10-25)
 
 - **License:** Apache-2.0 (was MIT).
 - **Remote access is off until you turn it on** (`agentmgr remote on`). Installs that had it on keep it on.

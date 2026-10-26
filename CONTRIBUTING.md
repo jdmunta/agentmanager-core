@@ -45,3 +45,11 @@ Open an issue with the template. For security problems, use GitHub's private rep
 ## License
 
 By contributing, you agree that your contributions are licensed under the [Apache License 2.0](LICENSE).
+
+## Sign your commits (DCO)
+
+By contributing, you certify the [Developer Certificate of Origin](https://developercertificate.org/): you wrote the change, or have the right to submit it under the project's license. Add a sign-off line to each commit with `git commit -s`:
+
+```
+Signed-off-by: Your Name <you@example.com>
+```

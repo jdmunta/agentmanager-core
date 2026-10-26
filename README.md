@@ -4,6 +4,8 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 
 ![Agents grouped by project, with an agent's brief: results, problem, solution, a flow diagram and checks](docs/images/agents.jpg)
 
+![The conflict radar: two agents changed the same lines of README.md, with a suggested order to land them](docs/images/conflict-radar.jpg)
+
 - **Intents in, agents out.** Give one intent or a list (one per line). Each becomes its own `claude` process.
 - **Repo or folder.** Give a git URL (cloned once, then each agent gets its own worktree and branch) or a local folder.
   - **Fast clones.** URLs are cloned as partial clones (`--filter=blob:none`): history now, file contents only for what's checked out.
@@ -53,6 +55,12 @@ New in 0.2, for running many agents at once:
 ## Install
 
 Runs on macOS and Linux; on Windows, use WSL2. Requires Node 20+, `git`, and the `claude` CLI, signed in (run `claude` once). Optional: `gh` (authenticated) for PR discovery by branch and PR state, Chrome (or Chromium, Brave, Edge) for live browser tabs, and Codex (`npm i -g @openai/codex`) as a second engine.
+
+```sh
+npm install -g agentmanager
+```
+
+Or from the repository:
 
 ```sh
 git clone https://github.com/jdmunta/agentmanager-core.git
@@ -735,4 +743,6 @@ npm test    # unit tests + end-to-end daemon tests against a stub claude (test/f
 - How the code fits together: [docs/architecture.md](docs/architecture.md). Extending it from a separate package (policies, audit, routes, engines, hub sign-in): [docs/plugins.md](docs/plugins.md). How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md). Changes per release: [CHANGELOG.md](CHANGELOG.md).
 - Security model and how to report a problem privately: [SECURITY.md](SECURITY.md).
 - Agent Manager sends no telemetry.
+- Agent Manager runs the agent CLIs you install and sign in to (Claude Code, Codex, Antigravity) with your own accounts. Use them within your provider's terms.
+- Maintained in spare time. Issues and pull requests are welcome; replies may take a few days.
 - Licensed under the [Apache License 2.0](LICENSE).
