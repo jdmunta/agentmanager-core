@@ -1,5 +1,5 @@
 {
-  "name": "agentmanager",
+  "name": "ai-agentmanager",
   "version": "1.0.0",
   "description": "Run background coding agents (Claude Code, Codex) per intent, and keep track of them from a web UI, your phone or the CLI",
   "keywords": [
@@ -11,13 +11,13 @@
     "agent-manager",
     "cli"
   ],
-  "homepage": "https://github.com/jdmunta/agentmanager-core#readme",
+  "homepage": "https://github.com/jdmunta/ai-agentmanager-core#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jdmunta/agentmanager-core.git"
+    "url": "git+https://github.com/jdmunta/ai-agentmanager-core.git"
   },
   "bugs": {
-    "url": "https://github.com/jdmunta/agentmanager-core/issues"
+    "url": "https://github.com/jdmunta/ai-agentmanager-core/issues"
   },
   "license": "Apache-2.0",
   "type": "module",
