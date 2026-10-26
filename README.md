@@ -59,8 +59,8 @@ Runs on macOS and Linux; on Windows, use WSL2. Requires Node 20+, `git`, and the
 **Stable release (recommended).** Releases are tagged (`v1.0.0`, `v1.0.1`, …) and listed on the [Releases](https://github.com/jdmunta/agentmanager-core/releases) page, with changes in [CHANGELOG.md](CHANGELOG.md).
 
 ```sh
-npm install -g agentmanager           # the latest release
-npm install -g agentmanager@1.0.0     # or a specific one
+npm install -g ai-agent-manager          # the latest release
+npm install -g ai-agent-manager@1.0.0    # or a specific one
 ```
 
 Or from the repository, at a release tag:
@@ -85,7 +85,7 @@ npm link
 
 | Installed with | Update |
 | --- | --- |
-| npm | `npm install -g agentmanager@latest` |
+| npm | `npm install -g ai-agent-manager@latest` |
 | A clone at a release tag | `git fetch --tags && git checkout v1.0.1 && npm install` (the tag you want) |
 | A clone of `main` | `git pull && npm install` |
 

@@ -53,7 +53,7 @@ jobs:
       - run: npm pack
       - name: Install the packed tarball globally and start the daemon
         run: |
-          npm i -g ./agentmanager-*.tgz
+          npm i -g ./*.tgz
           agentmgr --version
           export AGENTMGR_HOME="$RUNNER_TEMP/agentmgr" AGENTMGR_PORT=4799
           agentmgr serve > "$RUNNER_TEMP/serve.log" 2>&1 &
