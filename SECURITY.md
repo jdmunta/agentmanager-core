@@ -30,7 +30,7 @@ Everything lives in `~/.agentmanager/` (or `$AGENTMGR_HOME`):
 - `browser-profile/`: the live browser's Chrome profile. Sites you sign in to there stay signed in, as in any browser.
 - `scrollback/`, `briefs/`, `state.json`: terminal output and agent state. These can contain anything an agent printed, including secrets it read.
 
-Agent Manager sends **no telemetry**. It talks to the network only for what you set up: git remotes, GitHub (`gh`), Slack, a hub you joined, and the agents' own model providers.
+Agent Manager sends **no telemetry**. It talks to the network only for what you set up: git remotes, GitHub (`gh`), Slack, a hub you joined, and the agents' own model providers. **Check for updates** in the About box (or `agentmgr about --check`) asks the npm registry for the newest version, only when you click it.
 
 ### Things to be aware of
 

@@ -598,3 +598,15 @@ test('login service carries the home, port and plugin settings', () => {
     else process.env.AGENTMGR_PLUGINS = saved;
   }
 });
+
+test('about: release date from the changelog, version comparison', async () => {
+  const { releaseDate, newerThan } = await import('../src/about.js');
+  const log = '# Changelog\n\n## 1.1.0 (unreleased)\n\n## 1.0.1 (2026-11-02)\n\n## 1.0.0 (2026-10-25)\n';
+  assert.equal(releaseDate(log, '1.0.0'), '2026-10-25');
+  assert.equal(releaseDate(log, '1.0.1'), '2026-11-02');
+  assert.equal(releaseDate(log, '1.1.0'), null);
+  assert.equal(releaseDate(log, '1.0.10'), null);
+  assert.ok(newerThan('1.0.1', '1.0.0') && newerThan('1.10.0', '1.9.9') && newerThan('2.0.0', '1.99.99'));
+  assert.ok(!newerThan('1.0.0', '1.0.0') && !newerThan('1.0.0', '1.0.1'));
+  assert.ok(newerThan('1.0.0', '1.0.0-rc.1') && !newerThan('1.0.0-rc.1', '1.0.0'));
+});

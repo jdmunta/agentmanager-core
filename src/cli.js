@@ -4,6 +4,7 @@ import { Command, Option } from 'commander';
 import WebSocket from 'ws';
 import { HOST, PORT } from './config.js';
 import { api, BASE, ensureDaemon, isRunning } from './client.js';
+import { about, latestRelease } from './about.js';
 
 const tty = process.stdout.isTTY;
 const c = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : String(s));
@@ -853,6 +854,29 @@ export async function main(argv) {
       if (state && !['on', 'off'].includes(state)) throw new Error('Use: agentmgr judge [on|off]');
       const j = state ? await api('PUT', '/judge', { enabled: state === 'on' }) : await api('GET', '/judge');
       console.log(j.enabled ? `AI judge ${green('on')}  ${j.calls} of ${j.cap} calls today (on your own engine plan)` : `AI judge ${dim('off')}  (fixed rules only; turn on: agentmgr judge on)`);
+    });
+
+  program
+    .command('about')
+    .description('Version, release date, author, license and links; the running daemon, if any')
+    .option('--check', 'also ask the npm registry for the newest version')
+    .action(async (opts) => {
+      // An older daemon has no /about; this install's own details still apply.
+      const a = (await isRunning()) ? await api('GET', '/about').catch(() => about()) : about();
+      const row = (k, v) => console.log(`${dim(k.padEnd(13))} ${v}`);
+      console.log(`${a.product} ${green(a.version)}${a.releaseDate ? dim(`  released ${a.releaseDate}`) : ''}`);
+      row('Author', a.author ?? '—');
+      row('License', a.license ?? '—');
+      row('Package', `${a.package} (npm install -g ${a.package})`);
+      row('Code', a.links.repository ?? '—');
+      row('Issues', a.links.issues ?? '—');
+      if (a.daemon.port) row('Daemon', `pid ${a.daemon.pid}, port ${a.daemon.port}, since ${new Date(a.daemon.startedAt).toLocaleString()}, data in ${a.daemon.home}`);
+      else row('Daemon', dim('not running (start: agentmgr ui)'));
+      row('Node.js', `${a.daemon.node} on ${a.daemon.platform}`);
+      if (opts.check) {
+        const r = await latestRelease();
+        row('Latest', r.newer ? yellow(`${r.latest} is available: npm install -g ${a.package}@latest`) : `${r.latest} (up to date)`);
+      }
     });
 
   const remoteCmd = program.command('remote').description('Open Agent Manager from a phone or another computer on the same network');

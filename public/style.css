@@ -56,6 +56,15 @@ a:hover { text-decoration: underline; }
 .brand h1 { font-size: 16px; margin: 0; font-weight: 600; }
 .logo { color: var(--accent); }
 .conn { font-size: 12px; color: var(--muted); }
+.about-btn { font-size: 12px; padding: 2px 8px; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 999px; font-variant-numeric: tabular-nums; }
+.about-btn:hover, .about-btn:focus-visible { color: var(--text); border-color: var(--accent); }
+.about-dialog { width: min(560px, calc(100vw - 32px)); padding: 20px; }
+.about-dialog h2 { margin: 0 0 2px; font-size: 17px; }
+.about-dialog .hint { margin: 0; }
+.about-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 14px 0; font-size: 13px; }
+.about-list dt { color: var(--muted); }
+.about-list dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.about-list .sep { grid-column: 1 / -1; border-top: 1px solid var(--border); margin: 4px 0; }
 .conn.ok::before { content: '● '; color: var(--green); }
 .conn.bad::before { content: '● '; color: var(--red); }
 .top-actions { display: flex; gap: 8px; }

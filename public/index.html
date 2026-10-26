@@ -14,6 +14,7 @@
       <div class="brand">
         <span class="logo" aria-hidden="true">◆</span>
         <h1>Agent Manager</h1>
+        <button id="about-btn" class="about-btn" type="button" title="About Agent Manager: version, release, links">About</button>
         <span id="conn" class="conn" title="Daemon connection">connecting…</span>
       </div>
       <div class="top-actions">
@@ -334,6 +335,17 @@
         <h2>Remote access</h2>
         <div id="remote-content">Loading…</div>
         <div class="dialog-actions"><button type="button" id="remote-close" class="ghost">Close</button></div>
+      </div>
+    </dialog>
+
+    <dialog id="about-dialog" class="about-dialog">
+      <h2>Agent Manager</h2>
+      <p class="hint">Run and track background coding agents, one per intent.</p>
+      <dl id="about-list" class="about-list"></dl>
+      <p id="about-update" class="hint" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" id="about-check" class="ghost" title="Asks the npm registry for the newest version">Check for updates</button>
+        <button type="button" id="about-close" class="primary">Close</button>
       </div>
     </dialog>
 

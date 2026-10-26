@@ -2459,3 +2459,18 @@ test('hub plugins: their sign-in, request policies and audit', async () => {
     await hub.close();
   }
 });
+
+test('About: version, release date, author, license, links and this daemon', async () => {
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const { status, body: a } = await call('GET', '/about');
+  assert.equal(status, 200);
+  assert.equal(a.version, pkg.version);
+  assert.equal(a.package, pkg.name);
+  assert.equal(a.command, 'agentmgr');
+  assert.equal(a.license, 'Apache-2.0');
+  assert.ok(a.author, 'author is set in package.json');
+  assert.match(a.releaseDate ?? '', /^\d{4}-\d{2}-\d{2}$/, 'the current version has a dated changelog entry');
+  assert.match(a.links.repository, /^https:\/\/github\.com\//);
+  assert.equal(a.daemon.pid > 0, true);
+  assert.ok(a.daemon.home);
+});

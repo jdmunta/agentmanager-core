@@ -19,6 +19,7 @@
   "bugs": {
     "url": "https://github.com/jdmunta/ai-agentmanager-core/issues"
   },
+  "author": "Jagadesh Munta (https://github.com/jdmunta)",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
@@ -33,7 +34,8 @@
     "README.md",
     "LICENSE",
     "NOTICE",
-    "SECURITY.md"
+    "SECURITY.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "start": "node bin/agentmgr.js serve",

@@ -2730,6 +2730,61 @@ $('#new-form').addEventListener('submit', async (e) => {
 
 // ------------------------------------------------------------------ ask (general session)
 
+// ---------------------------------------------------------------- about
+const aboutDialog = $('#about-dialog');
+let aboutInfo = null;
+async function loadAbout() {
+  aboutInfo = await api('GET', '/about');
+  $('#about-btn').textContent = `v${aboutInfo.version}`;
+  return aboutInfo;
+}
+loadAbout().catch(() => {});
+function renderAbout(a) {
+  const link = (url, text = url.replace(/^https:\/\//, '')) => `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>`;
+  const when = (iso) => new Date(iso).toLocaleString();
+  const rows = [
+    ['Version', `${esc(a.version)}${a.releaseDate ? ` <span class="hint">released ${esc(a.releaseDate)}</span>` : ''}`],
+    ['Author', esc(a.author ?? '—')],
+    ['License', esc(a.license ?? '—')],
+    ['Install', `<code>npm install -g ${esc(a.package)}</code>, then <code>${esc(a.command ?? 'agentmgr')}</code>`],
+    ['Code', a.links.repository ? link(a.links.repository) : '—'],
+    ['Releases', a.links.releases ? link(a.links.releases, 'Release notes') : '—'],
+    ['Report a problem', a.links.issues ? link(a.links.issues, 'GitHub issues') : '—'],
+    null,
+    ['Daemon', `pid ${esc(a.daemon.pid)} · port ${esc(a.daemon.port ?? '—')} · running since ${esc(when(a.daemon.startedAt))}`],
+    ['Data folder', `<code>${esc(a.daemon.home ?? '—')}</code>`],
+    ['Node.js', esc(a.daemon.node)],
+    ['System', esc(a.daemon.platform)],
+    ['Claude Code', `<code>${esc(a.daemon.claudeBin ?? 'claude')}</code>`],
+  ];
+  $('#about-list').innerHTML = rows.map((r) => (r ? `<dt>${r[0]}</dt><dd>${r[1]}</dd>` : '<div class="sep"></div>')).join('');
+}
+$('#about-btn').onclick = async () => {
+  $('#about-update').hidden = true;
+  if (aboutInfo) renderAbout(aboutInfo);
+  else $('#about-list').innerHTML = '<dt>Loading…</dt><dd></dd>';
+  aboutDialog.showModal();
+  try {
+    renderAbout(await loadAbout()); // fresh daemon details (uptime, pid) each time it opens
+  } catch (err) {
+    $('#about-list').innerHTML = `<dt>Error</dt><dd>${esc(err.message)}</dd>`;
+  }
+};
+$('#about-close').onclick = () => aboutDialog.close();
+$('#about-check').onclick = async () => {
+  const out = $('#about-update');
+  out.hidden = false;
+  out.textContent = 'Checking…';
+  try {
+    const r = await api('GET', '/about/latest');
+    out.innerHTML = r.newer
+      ? `Version ${esc(r.latest)} is available. Update with <code>npm install -g ${esc(aboutInfo?.package ?? 'ai-agentmanager')}@latest</code>, then <code>agentmgr restart</code>.`
+      : `You have the latest version (${esc(r.current)}).`;
+  } catch (err) {
+    out.textContent = `Couldn't check: ${err.message}`;
+  }
+};
+
 const askDialog = $('#ask-dialog');
 $('#ask-btn').onclick = () => {
   $('#ask-error').hidden = true;
