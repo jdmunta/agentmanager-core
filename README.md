@@ -61,13 +61,13 @@ Runs on macOS and Linux; on Windows, use WSL2. Requires Node 20+, `git`, and the
 
 ```sh
 npm install -g ai-agentmanager          # the latest release
-npm install -g ai-agentmanager@1.0.0    # or a specific one
+npm install -g ai-agentmanager@1.0.1    # or a specific one
 ```
 
 Or from the repository, at a release tag:
 
 ```sh
-git clone --branch v1.0.0 --depth 1 https://github.com/jdmunta/ai-agentmanager-core.git
+git clone --branch v1.0.1 --depth 1 https://github.com/jdmunta/ai-agentmanager-core.git
 cd ai-agentmanager-core
 npm install
 npm link            # optional: puts `agentmgr` on your PATH
