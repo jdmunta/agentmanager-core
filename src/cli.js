@@ -879,6 +879,23 @@ export async function main(argv) {
       }
     });
 
+  program
+    .command('doctor')
+    .description('Check what AI Agent Manager needs on this machine (Node.js, Claude Code, git, gh, the daemon) and how to fix it')
+    .action(async () => {
+      const { doctor } = await import('./doctor.js');
+      const checks = await doctor();
+      const mark = { ok: green('✓'), warn: yellow('!'), fail: red('✗'), info: dim('·') };
+      const width = Math.max(...checks.map((c) => c.name.length));
+      for (const c of checks) {
+        console.log(`${mark[c.status]} ${c.name.padEnd(width)}  ${c.status === 'fail' ? red(c.detail) : c.detail}`);
+        if (c.fix) console.log(`  ${' '.repeat(width)}  ${dim('→')} ${c.fix}`);
+      }
+      const failed = checks.filter((c) => c.status === 'fail').length;
+      console.log(failed ? red(`\n${failed} problem${failed === 1 ? '' : 's'} to fix`) : green('\nReady: start with `agentmgr ui`'));
+      if (failed) process.exitCode = 1;
+    });
+
   const remoteCmd = program.command('remote').description('Open AI Agent Manager from a phone or another computer on the same network');
   const printRemote = async (st, { qr = true } = {}) => {
     if (!st.enabled || !st.running) return console.log(`remote access ${dim('off')}  (turn on: agentmgr remote on)`);

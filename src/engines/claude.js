@@ -84,6 +84,20 @@ export default {
   ],
   promptChoices: (screen) => promptChoices(screen),
 
+  /** Lines of Claude Code's own frame (input box, mode and status bar): never a question to the person. */
+  screenChrome: [
+    /\b(accept edits|bypass permissions|plan mode|auto mode|auto-accept edits) on\b/i,
+    /shift\+tab to cycle/i,
+    /\? for shortcuts/i,
+    /esc to interrupt/i,
+    /ctrl\+[a-z] to (expand|edit|show|hide)/i,
+    /update available/i,
+    /^[─━═-]{3,}/,
+    /^\/\w+$/,
+    /^[❯>]\s*$/,
+  ],
+  install: 'Install Claude Code (https://docs.claude.com/en/docs/claude-code) and run `claude` once to sign in',
+
   trust: (dir) => trustFolder(dir),
 
   /** A one-shot, tool-less call; the prompt goes on stdin and the answer comes back as text. */

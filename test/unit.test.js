@@ -8,6 +8,9 @@ import { slugify } from '../src/manager.js';
 import { STATE_VERSION, Store } from '../src/store.js';
 import { claudeProjectDir, extractRefs, scanTranscript } from '../src/tracker.js';
 import { passEnv, plist, unit } from '../src/service.js';
+import { stripChrome } from '../src/judge.js';
+import claude from '../src/engines/claude.js';
+import { notInstalled } from '../src/engines/index.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-unit-'));
 
@@ -622,4 +625,26 @@ test('about: release date from the changelog, version comparison', async () => {
   assert.ok(newerThan('1.0.1', '1.0.0') && newerThan('1.10.0', '1.9.9') && newerThan('2.0.0', '1.99.99'));
   assert.ok(!newerThan('1.0.0', '1.0.0') && !newerThan('1.0.0', '1.0.1'));
   assert.ok(newerThan('1.0.0', '1.0.0-rc.1') && !newerThan('1.0.0-rc.1', '1.0.0'));
+});
+
+test("stripChrome drops Claude Code's frame but keeps the agent's words", () => {
+  const screen = [
+    '● I added the helper. Want me to commit it?',
+    '* Cooked for 29s · done Monday 12:34 AM',
+    '──────────────────────────── add-a-capitalize-helper ─',
+    '❯',
+    '──────────────────────────────────────────────',
+    '⏵⏵ accept edits on (shift+tab to cycle) · ← for agents',
+    'Update available! Run: brew upgrade claude-code',
+    '/rc',
+  ].join('\n');
+  assert.equal(stripChrome(screen, claude.screenChrome), '● I added the helper. Want me to commit it?\n* Cooked for 29s · done Monday 12:34 AM');
+  assert.equal(stripChrome(screen, []), screen);
+});
+
+test('notInstalled says what is missing and how to fix it', () => {
+  const msg = notInstalled(claude, { claudeBin: 'claude' });
+  assert.match(msg, /`claude` isn't on the daemon's PATH/);
+  assert.match(msg, /AGENTMGR_CLAUDE_BIN/);
+  assert.match(notInstalled(claude, { claudeBin: '/opt/x/claude' }), /\/opt\/x\/claude doesn't exist/);
 });

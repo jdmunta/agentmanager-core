@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import pty from 'node-pty';
 import { expandHome, paths } from './config.js';
-import { DEFAULT_ENGINE, ENGINES, engineOf, installed } from './engines/index.js';
+import { DEFAULT_ENGINE, ENGINES, engineOf, installed, notInstalled } from './engines/index.js';
 import {
   DOC_KINDS,
   briefDir,
@@ -42,7 +42,7 @@ import * as git from './git.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
-import { Judge, clashPrompt, finishMessage, hash, reviewPrompt, screenPrompt, stuckPrompt } from './judge.js';
+import { Judge, clashPrompt, finishMessage, hash, reviewPrompt, screenPrompt, stripChrome, stuckPrompt } from './judge.js';
 import { findLocalUrls, findSignInLinks, parseCallback, parseUrl } from './preview.js';
 import { Plugins } from './plugins.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
@@ -907,6 +907,11 @@ export class AgentManager extends EventEmitter {
       }
     }
 
+    if (!installed(engine, this.config)) {
+      const error = notInstalled(engine, this.config);
+      this.patch(agent.id, { status: 'error', error });
+      throw Object.assign(new Error(error), { status: 400 });
+    }
     let proc;
     try {
       proc = pty.spawn(engine.bin(this.config), args, {
@@ -2270,7 +2275,7 @@ export class AgentManager extends EventEmitter {
   async judgeScreen(id, rt) {
     const agent = this.store.get(id);
     if (!agent) return;
-    const screen = this.screenText(rt);
+    const screen = stripChrome(this.screenText(rt), engineOf(agent).screenChrome);
     if (!screen) return;
     const h = hash(screen);
     if (rt.screenVerdict?.hash === h) return this.applyScreen(id, rt, rt.screenVerdict.data);
