@@ -191,6 +191,7 @@ export class AgentManager extends EventEmitter {
     this.config = config;
     this.plugins = plugins; // policies before actions, listeners after (src/plugins.js)
     this.runtimes = new Map(); // agent id -> { pty, chunks, size, clients, lastOutputAt, busy, stopping, exited }
+    this.inputAt = new Map(); // agent id -> when you last typed into its session or a shell
     this.shells = new Map(); // agent id -> ancillary shell runtime in the agent's folder
     this.cursors = new Map(); // session id -> transcript scan cursor
     this.locks = new Map();
@@ -268,6 +269,7 @@ export class AgentManager extends EventEmitter {
       ...agent,
       results: this.results(agent, rt, prs),
       priority: agent.priority ?? 2,
+      activeAt: this.activeAt(agent, rt),
       projectInfo: this.projectInfo(agent),
       usage,
       // Claude Code's own cost figure from the transcripts (absent until it records one).
@@ -293,6 +295,19 @@ export class AgentManager extends EventEmitter {
         prompt: rt?.pty && !rt.busy && rt.attention ? engineOf(agent).promptChoices(rt.tail) : null,
       },
     };
+  }
+
+  /**
+   * When the agent last did real work or you last worked with it: its conversation,
+   * its brief, your typing, or output while busy (not the redraw after a restart).
+   */
+  activeAt(agent, rt) {
+    const times = [agent.createdAt, agent.brief?.updatedAt, ...(agent.sessions ?? []).map((s) => s.lastMessageAt ?? s.lastActivity)]
+      .map((t) => (t ? Date.parse(t) : 0));
+    times.push(this.inputAt.get(agent.id) ?? 0);
+    if (rt?.pty && rt.busy && rt.lastOutputAt - (rt.startedAt ?? 0) > 60_000) times.push(rt.lastOutputAt);
+    const t = Math.max(0, ...times.filter(Number.isFinite));
+    return t ? new Date(t).toISOString() : null;
   }
 
   /**
@@ -1198,6 +1213,8 @@ export class AgentManager extends EventEmitter {
   }
 
   write(id, data, kind = 'claude') {
+    // Focus reports and terminal replies are not you typing.
+    if (!/^(\x1b\[[\d;?>]*[IOcRnt])+$/.test(data)) this.inputAt.set(id, Date.now());
     this.termRuntime(id, kind)?.pty?.write(data);
   }
 
@@ -1898,7 +1915,7 @@ export class AgentManager extends EventEmitter {
           session.usage = usage;
           changed = true;
         }
-        for (const key of ['title', 'lastPrompt', 'cost', 'lastActivity']) {
+        for (const key of ['title', 'lastPrompt', 'cost', 'lastActivity', 'lastMessageAt']) {
           if (res[key] != null && JSON.stringify(session[key]) !== JSON.stringify(res[key])) {
             session[key] = res[key];
             changed = true;

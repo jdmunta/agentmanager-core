@@ -83,6 +83,19 @@ test('scanTranscript reads incrementally and ignores partial lines', () => {
   assert.equal(scanTranscript(file, cursor).prs.length, 0);
 });
 
+test('scanTranscript: last message time ignores lines a resume appends', () => {
+  const file = path.join(tmp(), 's.jsonl');
+  const lines = [
+    { type: 'user', timestamp: '2026-10-20T10:00:00.000Z', message: { content: 'go' } },
+    { type: 'assistant', timestamp: '2026-10-20T10:05:00.000Z', message: { content: [{ type: 'text', text: 'done' }] } },
+    { type: 'user', isMeta: true, timestamp: '2026-10-27T09:00:00.000Z', message: { content: 'meta' } },
+    { type: 'last-prompt', lastPrompt: 'go' },
+    { type: 'cost-state', totalCostUSD: 0.1 },
+  ];
+  fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  assert.equal(scanTranscript(file, { offset: 0 }).lastMessageAt, '2026-10-20T10:05:00.000Z');
+});
+
 test('Store persists and resolves by id, prefix and name', () => {
   const file = path.join(tmp(), 'state.json');
   const s = new Store(file);

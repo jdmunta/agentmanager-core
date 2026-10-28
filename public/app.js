@@ -556,6 +556,11 @@ const copyBtn = (value) => `<button class="link" data-copy="${esc(value)}" title
 /** Agents waiting on you first, then running ones, then the rest. */
 const rank = (a) => (a.runtime.attention ? 0 : a.runtime.running ? 1 : 2);
 
+// Agents with no work and no input from you for a day sink below the active ones.
+const ACTIVE_MS = 24 * 3600 * 1000;
+const isActive = (a) =>
+  Boolean(a.runtime.attention || a.runtime.busy || a.status === 'preparing' || (a.activeAt && Date.now() - Date.parse(a.activeAt) < ACTIVE_MS));
+
 // Projects the user collapsed in the tree (kept per browser).
 const collapsed = new Set(
   (() => {
@@ -578,12 +583,14 @@ const prioChip = (p, { always = false } = {}) =>
 
 function agentItem(a) {
   const st = statusOf(a);
-  return `<li data-id="${a.id}" class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''}">
+  const idle = !isActive(a);
+  return `<li data-id="${a.id}" class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''}">
     <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
     <div class="intent">${a.kind === 'general' ? '<span class="tag">general</span> ' : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${esc(a.intent || 'General session')}</div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
     <div class="meta">
       <span class="mono">${a.id}</span>
+      ${idle && a.activeAt ? `<span title="Idle: no work and no input from you for over a day">💤 ${ago(a.activeAt)}</span>` : ''}
       ${a.git?.branch ? `<span class="branch" title="${esc(a.git.branch)}">⎇ ${esc(a.git.branch)}</span>` : ''}
       ${a.prs.length ? `<span>${a.prs.length} PR</span>` : ''}
       ${a.bugs.length ? `<span>${a.bugs.length} bug</span>` : ''}
@@ -608,8 +615,15 @@ function projectGroups(list) {
   }
   const out = [...groups.values()];
   for (const g of out) {
-    // Highest priority first, then agents needing you, then running ones, then newest.
-    g.agents.sort((a, b) => (a.priority ?? 2) - (b.priority ?? 2) || rank(a) - rank(b) || b.createdAt.localeCompare(a.createdAt));
+    // Active in the last day first; then highest priority, agents needing you, running ones, most recent.
+    g.agents.sort(
+      (a, b) =>
+        isActive(b) - isActive(a) ||
+        (a.priority ?? 2) - (b.priority ?? 2) ||
+        rank(a) - rank(b) ||
+        (b.activeAt ?? b.createdAt).localeCompare(a.activeAt ?? a.createdAt),
+    );
+    g.active = g.agents.filter(isActive).length;
     g.top = Math.min(...g.agents.map((a) => a.priority ?? 2));
     g.running = g.agents.filter((a) => a.runtime.running).length;
     g.waiting = g.agents.filter((a) => a.runtime.attention).length;
@@ -623,7 +637,13 @@ function projectGroups(list) {
   }
   const special = (g) => (g.key === 'general' ? 1 : g.key === 'other' ? 2 : 0);
   return out.sort(
-    (a, b) => special(a) - special(b) || a.top - b.top || b.waiting - a.waiting || b.running - a.running || a.label.localeCompare(b.label),
+    (a, b) =>
+      special(a) - special(b) ||
+      (b.active > 0) - (a.active > 0) ||
+      a.top - b.top ||
+      b.waiting - a.waiting ||
+      b.running - a.running ||
+      a.label.localeCompare(b.label),
   );
 }
 
@@ -1725,11 +1745,107 @@ const term = {
     this.agentId = null;
     $('#term-wrap').hidden = true;
     $('#detail').classList.remove('with-term');
+    if (document.body.classList.contains('term-max')) setExpanded(false);
+    if (document.fullscreenElement) document.exitFullscreen();
   },
 };
 
 $('#term-close').onclick = () => term.close();
 $('#term-fit').onclick = () => term.refit();
+
+// ------------------------------------------------------------------ resizing, expanding, full screen
+
+const layoutPref = {
+  get(key) {
+    try {
+      return localStorage.getItem(`agentmgr.${key}`);
+    } catch {
+      return null;
+    }
+  },
+  set(key, value) {
+    try {
+      value == null ? localStorage.removeItem(`agentmgr.${key}`) : localStorage.setItem(`agentmgr.${key}`, value);
+    } catch {}
+  },
+};
+
+function applyLayout() {
+  const side = layoutPref.get('sideWidth');
+  const brief = layoutPref.get('briefHeight');
+  document.documentElement.style.setProperty('--side-w', side ? `${side}px` : '340px');
+  if (brief) document.documentElement.style.setProperty('--brief-h', `${brief}px`);
+  else document.documentElement.style.removeProperty('--brief-h');
+  $('#detail').classList.toggle('brief-sized', Boolean(brief));
+}
+applyLayout();
+
+/** Drag a handle; `move` gets the pointer position and returns the value to keep. */
+function dragHandle(el, axis, move, key) {
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    el.classList.add('dragging');
+    document.body.classList.add('resizing', axis);
+    let value = null;
+    const onMove = (ev) => {
+      value = move(ev);
+      applyLayout();
+    };
+    const onUp = () => {
+      el.classList.remove('dragging');
+      document.body.classList.remove('resizing', axis);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      if (value != null) layoutPref.set(key, Math.round(value));
+      term.refit();
+    };
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+  });
+  el.addEventListener('dblclick', () => {
+    layoutPref.set(key, null);
+    applyLayout();
+    requestAnimationFrame(() => term.refit());
+  });
+}
+
+dragHandle($('#split-side'), 'cols', (ev) => {
+  const w = Math.min(Math.max(ev.clientX, 220), window.innerWidth * 0.6);
+  layoutPref.set('sideWidth', Math.round(w));
+  return w;
+}, 'sideWidth');
+
+dragHandle($('#split-term'), 'rows', (ev) => {
+  const top = $('#detail').getBoundingClientRect().top;
+  const h = Math.min(Math.max(ev.clientY - top, 60), $('#detail').clientHeight - 160);
+  layoutPref.set('briefHeight', Math.round(h));
+  return h;
+}, 'briefHeight');
+
+function setExpanded(on) {
+  document.body.classList.toggle('term-max', on);
+  $('#term-max').classList.toggle('on', on);
+  $('#term-max').textContent = on ? '⤡ Restore' : '⤢ Expand';
+  requestAnimationFrame(() => term.refit());
+}
+$('#term-max').onclick = () => setExpanded(!document.body.classList.contains('term-max'));
+$('#term-full').onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else $('#term-wrap').requestFullscreen?.().catch(() => setExpanded(true));
+};
+document.addEventListener('fullscreenchange', () => {
+  const on = document.fullscreenElement === $('#term-wrap');
+  $('#term-full').classList.toggle('on', on);
+  $('#term-full').textContent = on ? '⛶ Exit full screen' : '⛶ Full screen';
+  requestAnimationFrame(() => term.refit());
+});
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.shiftKey && e.code === 'KeyE' && !$('#term-wrap').hidden) {
+    e.preventDefault();
+    setExpanded(!document.body.classList.contains('term-max'));
+  }
+}, true);
 $('#term-resume').onclick = () => {
   const id = term.agentId;
   if (isShell(term.kind)) {
