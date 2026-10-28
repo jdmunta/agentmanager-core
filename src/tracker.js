@@ -132,7 +132,7 @@ function textOf(content) {
  * subsequent calls only parse newly appended lines.
  */
 export function scanTranscript(file, cursor, bugPatterns = []) {
-  const result = { prs: [], bugs: [], title: null, lastPrompt: null, cost: null, lastActivity: null };
+  const result = { prs: [], bugs: [], title: null, lastPrompt: null, cost: null, lastActivity: null, lastMessageAt: null };
   // Token usage per API response, kept on the cursor so incremental scans accumulate.
   cursor.usage ??= new Map();
   let fd;
@@ -159,6 +159,10 @@ export function scanTranscript(file, cursor, bugPatterns = []) {
         rec = JSON.parse(line);
       } catch {
         continue;
+      }
+      // The last real message: resuming a session appends bookkeeping lines, which have no timestamp.
+      if ((rec.type === 'user' || rec.type === 'assistant') && !rec.isMeta && rec.timestamp > (result.lastMessageAt ?? '')) {
+        result.lastMessageAt = rec.timestamp;
       }
       switch (rec.type) {
         case 'pr-link':
