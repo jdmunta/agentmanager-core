@@ -23,6 +23,14 @@ export function installed(engine, config) {
   return (process.env.PATH ?? '').split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, bin)));
 }
 
+/** What to tell the person when an engine's command isn't on this machine. */
+export function notInstalled(engine, config) {
+  const bin = engine.bin(config);
+  const how = engine.install ?? `Install ${engine.label}`;
+  const where = path.isAbsolute(bin) ? `${bin} doesn't exist` : `\`${bin}\` isn't on the daemon's PATH`;
+  return `${engine.label} not found: ${where}. ${how}, then run \`agentmgr restart\`. If it's installed somewhere else, set its path in config.json${engine.id === 'claude' ? ' ("claudeBin") or AGENTMGR_CLAUDE_BIN' : ` ("engines": {"${engine.id}": {"bin": "…"}})`}.`;
+}
+
 /** Every engine, with whether it can run here, for pickers and the hub. */
 export function listEngines(config) {
   return Object.values(ENGINES).map((e) => ({ id: e.id, label: e.label, installed: installed(e, config), permissionModes: e.permissionModes, supports: e.supports }));

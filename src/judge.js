@@ -78,6 +78,16 @@ export function stuckPrompt(ctx, finding, events, past = []) {
   ].join('\n');
 }
 
+/** The screen without the engine's own frame (input box, mode indicators, status bar). */
+export function stripChrome(screen, patterns = []) {
+  if (!patterns.length) return screen;
+  return screen
+    .split('\n')
+    .filter((line) => !patterns.some((re) => re.test(line.trim())))
+    .join('\n')
+    .trim();
+}
+
 export function screenPrompt(ctx, screen, past = []) {
   return [
     'You supervise an AI coding agent running in a terminal. It has stopped producing output.',
@@ -87,6 +97,8 @@ export function screenPrompt(ctx, screen, past = []) {
     '- "error": it crashed, hit an error it cannot recover from, or a limit (rate limit, auth, quota)',
     '- "idle": finished a step and is simply waiting for the next instruction, nothing specific to answer',
     'For "question", copy the question in plain words and list the choices it offered, if any.',
+    'The tool\'s own input box, mode indicators and status bar (for example "accept edits on", "plan mode on",',
+    '"shift+tab to cycle", "? for shortcuts", "update available") are not questions: only the agent\'s own words count.',
     RULES,
     'Shape: {"state": "question|done|error|idle", "confidence": 0.0, "summary": "one line for an inbox", "question": "or empty", "choices": ["..."]}',
     '',

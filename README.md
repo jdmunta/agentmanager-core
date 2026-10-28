@@ -55,6 +55,18 @@ New in 0.2, for running many agents at once:
 - **Checkpoints and forks.** The code (uncommitted work included) and the conversation are saved at the end of every turn. **Fork** starts a new agent from now or from any checkpoint, in its own worktree, to try another direction without losing the first.
 - **Races.** Send one intent to several agents with different models or approaches. Compare their outcome, checks, size of change, cost and a test command run in each worktree, read their diffs side by side, then pick a winner and delete the rest.
 
+## When to use it
+
+Claude Code on its own, including its built-in ways to run work in parallel, is enough for one repo in one sitting. AI Agent Manager is for when that stops being enough:
+
+- **Many sessions across several repos,** running for hours, where you lose track of which one is waiting on you.
+- **Agents that must survive** a closed terminal, a restart or a reboot, and pick up where they left off.
+- **Several agents in one repo,** each on its own worktree and branch, with a warning when two touch the same code.
+- **Keeping up without reading transcripts:** a brief per agent (result, problem, fix, checks) and one inbox for every prompt and question.
+- **From anywhere:** your phone, another computer, or several machines through the hub.
+
+**Trying it costs little.** It runs the same `claude` you already use, with your plan and your repo's `CLAUDE.md` and skills. Sessions you started with `claude` in a terminal can be continued in it (**Import** above the agent list), and you can go back to a plain terminal any time with `claude --resume`.
+
 ## Install
 
 Runs on macOS and Linux; on Windows, use WSL2. Requires Node 20+, `git`, and the `claude` CLI, signed in (run `claude` once). Optional: `gh` (authenticated) for PR discovery by branch and PR state, Chrome (or Chromium, Brave, Edge) for live browser tabs, and Codex (`npm i -g @openai/codex`) as a second engine.
@@ -92,6 +104,8 @@ npm link
 | A clone at a release tag | `git fetch --tags && git checkout v1.0.1 && npm install` (the tag you want) |
 | A clone of `main` | `git pull && npm install` |
 
+**Check your setup.** `agentmgr doctor` checks Node.js, Claude Code and its sign-in, git, `gh`, the data folder, the daemon's port and Chrome, and says how to fix anything missing.
+
 ## Quick start on a new computer
 
 **A computer that runs agents.** After installing:
@@ -128,6 +142,7 @@ The hub listens on port 4720, on this Mac and on its Tailscale address (`--host`
 ```sh
 agentmgr ui                                   # start the daemon and open http://127.0.0.1:4717
 agentmgr service install                      # start the daemon at login (launchd / systemd --user)
+agentmgr doctor                               # check Node.js, Claude Code, git, gh, the port; says how to fix
 
 agentmgr add "Fix the flaky login test" -d ~/src/app
 agentmgr add -r https://github.com/org/repo.git \
