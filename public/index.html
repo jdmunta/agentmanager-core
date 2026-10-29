@@ -214,6 +214,13 @@
         </div>
         <div class="team-only" hidden>
           <p class="hint">An analyst writes the analysis and critics challenge it until they agree; then an implementer builds it, a tester tests it and a reviewer approves it or sends it back. The team stops for you when the reviewer approves, or if they can't agree. No repository yet? Leave the repository and folder empty (or give a new folder) and the team starts a new project. Tip: pick <b>Accept edits</b> or <b>Auto</b> as the permission mode, or the agents stop to ask before each edit or command.</p>
+          <label>
+            How the team runs
+            <select name="teamMode">
+              <option value="lead" selected>One lead session; the roles are its sub-agents</option>
+              <option value="agents">Separate agents, one per role (any engine)</option>
+            </select>
+          </label>
           <div class="row">
             <label>
               Critics

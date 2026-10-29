@@ -596,3 +596,8 @@ pre.diff .meta { color: var(--muted); font-weight: 600; }
 .need-kind.team { background: var(--accent); color: #fff; }
 .flag.role { font-size: 11px; padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); }
 @media (max-width: 800px) { .team-timeline li { grid-template-columns: 1fr; gap: 2px; } }
+.team-ask { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.team-ask textarea { width: 100%; }
+.team-quest { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+.team-quest summary { cursor: pointer; }
+.team-quest .team-timeline { margin-top: 8px; }

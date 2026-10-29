@@ -45,7 +45,7 @@ import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
 import { Judge, clashPrompt, finishMessage, hash, reviewPrompt, screenPrompt, stripChrome, stuckPrompt } from './judge.js';
 import { findLocalUrls, findSignInLinks, parseCallback, parseUrl } from './preview.js';
 import { Plugins } from './plugins.js';
-import { teamDir, teamPrompt } from './teams.js';
+import { leadPrompt, subagents, teamDir, teamPrompt } from './teams.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
 import {
   bugFromRef,
@@ -853,6 +853,7 @@ export class AgentManager extends EventEmitter {
   launchOptions(agent, { planning = false } = {}) {
     const engine = engineOf(agent);
     let writableDir = null;
+    let agents = null;
     const prompts = [];
     const task = agent.kind !== 'general';
     const withBrief = Boolean(this.config.brief && task);
@@ -877,10 +878,16 @@ export class AgentManager extends EventEmitter {
       fs.mkdirSync(teamDir(agent.team.id), { recursive: true });
       const dir = fs.realpathSync(teamDir(agent.team.id));
       writableDir = writableDir ? [writableDir, dir] : dir;
-      prompts.push(teamPrompt(agent.team.role, dir));
+      const team = this.store.data.teams?.[agent.team.id];
+      if (agent.team.role === 'lead' && team) {
+        prompts.push(leadPrompt(team, dir, agent.baseRef));
+        agents = subagents(team, dir);
+      } else {
+        prompts.push(teamPrompt(agent.team.role, dir));
+      }
     }
     // Appended system prompts last only for the process they're passed to, so they go on every launch.
-    return { extra: engine.extraArgs(this.config), permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null };
+    return { extra: engine.extraArgs(this.config), permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null, agents };
   }
 
   /** Spawn the agent's engine in a PTY, reusing its terminal clients and scrollback. */
