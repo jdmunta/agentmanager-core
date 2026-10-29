@@ -641,7 +641,7 @@ export async function main(argv) {
     .option('--role-model <role=model...>', 'model for one role, e.g. --role-model analyst=opus reviewer=opus')
     .option('--max-rounds <n>', 'analysis rounds before it asks you (default 3)')
     .option('--max-loops <n>', 'fix rounds per request before it asks you (default 3)')
-    .option('--gap-rounds <n>', 'rounds it runs on its own for what the reviewer says is still missing (default 3, 0: off)')
+    .option('--gap-rounds <n>', 'gap rounds (for what the reviewer says is still missing) it runs without asking you (default 0: it asks first)')
     .option('--separate', 'one agent per role instead of one lead session with sub-agents')
     .action(async (problem, opts) => {
       await daemon();

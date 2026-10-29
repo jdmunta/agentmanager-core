@@ -213,7 +213,7 @@
           </label>
         </div>
         <div class="team-only" hidden>
-          <p class="hint">An analyst writes the analysis and critics challenge it until they agree; then an implementer builds it, a tester tests it and a reviewer approves it or sends it back. The reviewer also lists what the request asks for that isn't built yet, and the team runs gap rounds for it on its own. The team stops for you when nothing is missing (or the gap rounds are used up), or if they can't agree. No repository yet? Leave the repository and folder empty (or give a new folder) and the team starts a new project. Tip: pick <b>Accept edits</b> or <b>Auto</b> as the permission mode, or the agents stop to ask before each edit or command.</p>
+          <p class="hint">An analyst writes the analysis and critics challenge it until they agree; then an implementer builds it, a tester tests it and a reviewer approves it or sends it back. The reviewer also lists what the request asks for that isn't built yet; the team then asks you whether to run a gap round for it. The team stops for you when the reviewer approves, or if they can't agree. No repository yet? Leave the repository and folder empty (or give a new folder) and the team starts a new project. Tip: pick <b>Accept edits</b> or <b>Auto</b> as the permission mode, or the agents stop to ask before each edit or command.</p>
           <label>
             How the team runs
             <select name="teamMode">
@@ -245,8 +245,8 @@
               <input name="maxLoops" type="number" min="1" max="10" placeholder="3" />
             </label>
             <label>
-              Gap rounds <span class="hint">for what's still missing; 0: off</span>
-              <input name="gapRounds" type="number" min="0" max="10" placeholder="3" />
+              Gap rounds without asking <span class="hint">0: it asks you first</span>
+              <input name="gapRounds" type="number" min="0" max="10" placeholder="0" />
             </label>
           </div>
           <label>

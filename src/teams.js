@@ -204,11 +204,11 @@ export function leadPrompt(team, dir, baseRef) {
     `5. Test: ask the tester sub-agent to test it and write ${f('test-<round>.md')}${s.testCommand ? ` (the project's test command is: ${s.testCommand})` : ''}. On "fail", start the next implementation round with the test report.`,
     `6. Review: ask the reviewer sub-agent to review the change${baseRef ? ` (git diff ${baseRef.split(' @ ')[1] ?? baseRef}...HEAD)` : ''} against the analysis and the test report, and write ${f('review-<round>.md')}. On "changes", start the next implementation round with the review.`,
     `At most ${s.maxLoops} implementation rounds per quest: if the work is still sent back after that for anything beyond small fixes, write a blocked file saying what is left, and stop.`,
-    s.gapRounds
-      ? `7. When the reviewer approves with "coverage: partial" (the review lists gaps), and fewer than ${s.gapRounds} gap round${s.gapRounds > 1 ? 's' : ''} have run for this request, start a gap round yourself, without asking: it is the next quest. ` +
-        `Write ${path.join(dir, 'quest-<next n>', 'request.md')} starting with the heading "# Gap round <k> of ${s.gapRounds}", then the request it fills gaps for (the problem, or the person's request) and the gaps from the review, and run the steps for it. The reviewer checks coverage against that request.`
-      : '7. Gap rounds are off for this team: when the reviewer approves, stop, even if the review lists gaps.',
-    '8. Otherwise, when the reviewer approves: stop. Tell the person in a few lines what the team built, what the reviewer said, and any gaps still left, and wait for their decision. Do not push, merge or open a pull request unless the person tells you to.',
+    `7. A gap round builds what the reviewer says is still missing ("coverage: partial", the review's Gaps section). It is the next quest: write ${path.join(dir, 'quest-<next n>', 'request.md')} starting with the heading "# Gap round <k>", then the request it fills gaps for (the problem, or the person's request) and the gaps from the review, and run the steps for it. The reviewer checks coverage against that request. ` +
+      (s.gapRounds
+        ? `When the reviewer approves with gaps and fewer than ${s.gapRounds} gap round${s.gapRounds > 1 ? 's' : ''} have run for this request, start the next one yourself, without asking.`
+        : 'Ask the person before each gap round: when the reviewer approves with gaps, stop (step 8) and list the gaps; start a gap round only when the person says so.'),
+    '8. When the reviewer approves (and no gap round starts by itself): stop. Tell the person in a few lines what the team built, what the reviewer said, and the gaps still left, if any, asking whether to run a gap round for them; then wait for their decision. Do not push, merge or open a pull request unless the person tells you to.',
   ];
   const quests =
     `Each request the team works on is a quest with its own folder: the first problem is quest 1, in ${path.join(dir, 'quest-1')}. ` +
@@ -351,8 +351,9 @@ export class Teams extends EventEmitter {
       critics: n,
       maxRounds: limit(maxRounds, defaults.maxRounds ?? 3),
       maxLoops: limit(maxLoops, defaults.maxLoops ?? 3),
-      // Rounds the team starts on its own for what the reviewer says is still missing (0: off).
-      gapRounds: Math.min(10, Math.max(0, Number.isInteger(Number(gapRounds ?? defaults.gapRounds ?? 3)) ? Number(gapRounds ?? defaults.gapRounds ?? 3) : 3)),
+      // Gap rounds the team starts without asking, for what the reviewer says is still missing;
+      // 0 (the default): it stops and asks the person before each one.
+      gapRounds: Math.min(10, Math.max(0, Number.isInteger(Number(gapRounds ?? defaults.gapRounds ?? 0)) ? Number(gapRounds ?? defaults.gapRounds ?? 0) : 0)),
       testCommand: testCommand?.trim() || defaults.testCommand || null,
       models: { ...defaults.models, ...models },
       engines: roleEngines,
@@ -746,7 +747,7 @@ export class Teams extends EventEmitter {
     const k = (team.gapRound ?? 0) + 1;
     const base = team.quests?.length && team.request?.match(/^gap round\b/i) ? team.quests.findLast((q) => !/^gap round\b/i.test(q.request))?.request : null;
     const request = base ?? team.request ?? team.intent;
-    const title = `Gap round ${k}${auto ? ` of ${team.settings.gapRounds}` : ''}`;
+    const title = `Gap round ${k}`;
     const gaps = review ? gapsOf(review.text) : '';
     const n = (team.quest ?? 1) + 1;
     if (team.stage === 'review') team.stage = 'gaps';
@@ -776,7 +777,7 @@ export class Teams extends EventEmitter {
       const review = this.lastGaps(team);
       return this.toLead(
         team,
-        `The person wants a gap round now (beyond the team's gap round limit if needed): start the next quest with ${path.join(team.dir, `quest-${team.quest + 1}`, 'request.md')}, headed "# Gap round ${(team.gapRound ?? 0) + 1}", for ${review ? `the gaps in ${review.file}` : 'what the person says is missing'}, and run the steps for it.${note ? `\n\nFrom the person:\n${note}` : ''}`,
+        `The person wants a gap round now: start the next quest with ${path.join(team.dir, `quest-${team.quest + 1}`, 'request.md')}, headed "# Gap round ${(team.gapRound ?? 0) + 1}", for ${review ? `the gaps in ${review.file}` : 'what the person says is missing'}, and run the steps for it.${note ? `\n\nFrom the person:\n${note}` : ''}`,
         'gaps',
       );
     }
@@ -967,6 +968,11 @@ export class Teams extends EventEmitter {
       files,
       // What the latest review says is still missing: the person can run a gap round for it.
       gaps: team.history.findLast((h) => h.role === 'reviewer')?.coverage === 'partial',
+      gapList: (() => {
+        const g = this.lastGaps(team);
+        const text = g ? gapsOf(g.text) : '';
+        return text.length > 2000 ? `${text.slice(0, 1999)}…` : text || null;
+      })(),
       branch: owner?.branch ?? null,
       folder: owner?.sourceDir ?? owner?.workdir ?? null,
       // No GitHub (or other) remote: publish, merge locally or keep, instead of a pull request.

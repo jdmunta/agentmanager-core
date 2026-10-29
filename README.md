@@ -557,7 +557,7 @@ The source agent keeps running untouched.
 - **Tester** runs the tests and tries the change; it may add tests, but failures go back to the implementer.
 - **Reviewer** reviews the diff against the analysis and the test report, and approves it or sends it back. It also checks coverage: what the request asks for that isn't built yet goes in its review's **Gaps** section, with a `coverage: complete` or `coverage: partial` line.
 
-**Gap rounds.** A big request rarely gets built in one pass. When the reviewer approves good work but lists gaps, the team starts a **gap round** on its own: the next quest (`quest-2/`, …), from a new analysis, for just what is missing, on the same branch. It goes on until the reviewer finds nothing missing or the team has run its gap rounds (3 by default; **Gap rounds** in the form, `--gap-rounds`, `0` turns them off), and then stops for you. If gaps are still left, **Fix gaps** in the team view (`agentmgr team fix-gaps <team> ["note"]`) runs one more round for them, at the end or after you merged. Each round shows up under **Earlier requests**.
+**Gap rounds.** A big request rarely gets built in one pass. When the reviewer approves good work but lists gaps, the team stops and shows you the gaps. **Run a gap round** (`agentmgr team fix-gaps <team> ["note"]`) starts the next quest (`quest-2/`, …), from a new analysis, for just what is missing, on the same branch; or take the work as it is. You can run a gap round after merging too. Each round shows up under **Earlier requests**. To let the team run some gap rounds without asking, set **Gap rounds without asking** in the form (`--gap-rounds 2`); it asks you once those are used up.
 
 Either way, the roles hand off through Markdown files in the team's folder (`~/.agentmanager/teams/<id>/`: `analysis-1.md`, `critique-1-1.md`, `test-1.md`, `review-1.md`, …), each ending with a `verdict:` line. AI Agent Manager reads each verdict to show where the team stands, and you can read every handoff in the team view. With separate agents it also tells the next agent what to read. The team works in one worktree and branch.
 
@@ -778,7 +778,7 @@ State lives in `~/.agentmanager/` (`state.json`, `daemon.log`, `repos/` for shar
   "inbox": true,
   "maxCheckpoints": 40,
   "raceTestTimeoutSec": 900,
-  "teams": { "mode": "lead", "critics": 1, "maxRounds": 3, "maxLoops": 3, "gapRounds": 3, "newProjectsDir": "~/projects", "models": { "analyst": "opus", "reviewer": "opus" } },
+  "teams": { "mode": "lead", "critics": 1, "maxRounds": 3, "maxLoops": 3, "gapRounds": 0, "newProjectsDir": "~/projects", "models": { "analyst": "opus", "reviewer": "opus" } },
   "conflictRefreshSec": 60,
   "stuck": { "repeatFailures": 3, "thrashReverts": 2, "thrashEdits": 10, "driftMinutes": 20, "driftActions": 25 },
   "judge": { "enabled": true, "model": "haiku", "dailyCalls": 300 },

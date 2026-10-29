@@ -706,8 +706,9 @@ test('team lead: sub-agents per role, and the steps it runs', () => {
   assert.match(p, /Stop only when the reviewer approves/);
   assert.match(p, /quest-1/);
   assert.match(p, /A question about the team's work isn't a quest/);
-  assert.match(p, /Gap rounds are off/);
+  assert.match(p, /# Gap round <k>[\s\S]*Ask the person before each gap round/);
   const gp = leadPrompt({ settings: { ...team.settings, gapRounds: 2 } }, '/t/x', null);
-  assert.match(gp, /fewer than 2 gap rounds[\s\S]*# Gap round <k> of 2/);
+  assert.match(gp, /fewer than 2 gap rounds have run for this request, start the next one yourself, without asking/);
+  assert.doesNotMatch(gp, /Ask the person before each gap round/);
   assert.deepEqual(claude.optionArgs({ agents: { a: { description: 'd', prompt: 'p' } } }), ['--agents', '{"a":{"description":"d","prompt":"p"}}']);
 });

@@ -1831,7 +1831,7 @@ test('teams: a new project without a repository gets a git repo, and the work me
   const gap = await waitFor(async () => ((await teamNow()).quest === 2 ? teamNow() : null), 20000, 'gap round');
   assert.equal(gap.stage, 'analyze');
   assert.equal(gap.gapRound, 1);
-  assert.match(gap.request, /^Gap round 1 of 1/);
+  assert.match(gap.request, /^Gap round 1/);
   assert.equal(gap.quests[0].history.at(-1).coverage, 'partial');
   assert.equal(gap.quests[0].outcome, 'approved, with gaps');
   const request = fs.readFileSync(path.join(team.dir, 'quest-2', 'request.md'), 'utf8');
@@ -1845,6 +1845,7 @@ test('teams: a new project without a repository gets a git repo, and the work me
   hand('quest-2/review-1.md', 'Good.\n## Gaps\n- No --json\ncoverage: partial\nverdict: approve\n');
   const ready = await stage('ready');
   assert.equal(ready.gaps, true);
+  assert.equal(ready.gapList, '- No --json');
   assert.equal(ready.history.at(-1).file, 'quest-2/review-1.md');
   assert.match((await call('GET', `/teams/${team.id}/files/quest-2%2Freview-1.md`)).body.markdown, /No --json/);
   assert.equal(ready.remote, false);
@@ -1865,6 +1866,7 @@ test('teams, one lead session: the roles are its sub-agents; it stays and takes 
   const origin = makeOrigin('teamlead');
   assert.equal((await call('POST', '/teams', { mode: 'lead', engine: 'codex', intent: 'Fix it', repo: `file://${origin}` })).status, 400, 'Codex has no sub-agents');
   const team = (await call('POST', '/teams', { intent: 'Make logout clear every token', repo: `file://${origin}`, critics: 1, maxRounds: 2, testCommand: 'npm test', models: { reviewer: 'opus' } })).body;
+  assert.equal(team.settings.gapRounds, 0, 'asks before a gap round by default');
   assert.equal(team.mode, 'lead', 'one lead session by default');
   assert.deepEqual(team.members.map((m) => m.role), ['lead']);
   assert.deepEqual(team.subagents.map((r) => r.role), ['analyst', 'critic', 'implementer', 'tester', 'reviewer']);
@@ -1882,6 +1884,7 @@ test('teams, one lead session: the roles are its sub-agents; it stays and takes 
   assert.match(system, /You stay after a quest ends/);
   assert.match(system, /Run the whole quest without asking the person/);
   assert.match(system, /save each reply, unedited/);
+  assert.match(system, /Ask the person before each gap round/);
   assert.match(launch.args[launch.args.indexOf('--') + 1], /Problem to solve:\nMake logout clear every token[\s\S]*quest 1[\s\S]*quest-1\/analysis-1\.md/);
 
   const teamNow = async () => (await call('GET', `/teams/${team.id}`)).body;
@@ -1945,18 +1948,21 @@ test('teams, one lead session: the roles are its sub-agents; it stays and takes 
   hand('analysis-1.md', 'Add an expiry.\nverdict: ready\n', 2);
   const q2d = await stage('discuss', (t) => t.quest === 2);
   assert.equal(q2d.history[0].file, 'quest-2/analysis-1.md');
-  // Approved with gaps: the lead starts a gap round on its own (stage "gaps"), as quest 3.
+  // Approved with gaps: the team stops for you; you ask for a gap round and the lead opens quest 3.
   hand('critique-1-1.md', 'Fine.\nverdict: agree\n', 2);
   hand('implementation-1.md', 'Done.\nverdict: done\n', 2);
   hand('test-1.md', 'Green.\nverdict: pass\n', 2);
   hand('review-1.md', 'Good.\n## Gaps\n- No admin override\ncoverage: partial\nverdict: approve\n', 2);
-  const gaps = await stage('gaps');
-  assert.equal(gaps.gaps, true);
+  const withGaps = await stage('ready', (t) => t.quest === 2);
+  assert.equal(withGaps.gaps, true);
+  assert.equal(withGaps.gapList, '- No admin override');
+  const gaps = (await call('POST', `/teams/${team.id}/fix-gaps`, {})).body;
+  assert.equal(gaps.stage, 'gaps');
   assert.ok(!manager.idleExpected(lead.id), 'the lead is expected to start the gap round');
-  hand('request.md', '# Gap round 1 of 3\nExpire tokens after a week.\n- No admin override\n', 3);
+  hand('request.md', '# Gap round 1\nExpire tokens after a week.\n- No admin override\n', 3);
   const q3 = await stage('analyze', (t) => t.quest === 3);
   assert.equal(q3.gapRound, 1);
-  assert.match(q3.request, /^Gap round 1 of 3/);
+  assert.match(q3.request, /^Gap round 1/);
   assert.equal(q3.quests.at(-1).outcome, 'approved, with gaps');
   await call('DELETE', `/teams/${team.id}?agents=1`);
   assert.equal((await call('GET', `/agents/${lead.id}`)).status, 404);

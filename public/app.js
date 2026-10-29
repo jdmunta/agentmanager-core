@@ -919,9 +919,9 @@ function needCard(it, { inDetail = false } = {}) {
       </div>`;
   } else if (it.kind === 'team') {
     const t = it.t;
-    body = `<p class="need-title">${t.stage === 'ready' ? `✓ The reviewer approved <b>${esc(t.name)}</b>` : `<b>${esc(t.name)}</b> needs a decision: ${esc(t.blocked?.reason ?? '')}`}</p>
+    body = `<p class="need-title">${t.stage === 'ready' ? `✓ The reviewer approved <b>${esc(t.name)}</b>${t.gaps ? ', with parts still missing: run a gap round?' : ''}` : `<b>${esc(t.name)}</b> needs a decision: ${esc(t.blocked?.reason ?? '')}`}</p>
       <p class="hint">${esc(t.intent.split('\n')[0].slice(0, 140))}</p>
-      <div class="need-actions"><button class="small primary" data-ib="team-open" data-team="${t.id}">${t.stage === 'ready' ? 'Review and finalize' : 'Decide'}</button></div>`;
+      <div class="need-actions"><button class="small primary" data-ib="team-open" data-team="${t.id}">${t.stage !== 'ready' ? 'Decide' : t.gaps ? 'See the gaps' : 'Review and finalize'}</button></div>`;
   } else if (it.kind === 'plan') {
     const title = a.planReview.markdown?.match(/^#\s+(.+)$/m)?.[1] ?? 'Implementation plan';
     body = `<p class="need-title">${esc(title)}</p>
@@ -1182,15 +1182,19 @@ function renderTeam() {
   const memberOf = (id) => t.members.find((m) => m.id === id);
   const gate =
     t.stage === 'ready'
-      ? `<div class="team-gate"><b>✓ The reviewer approved it.</b> Look at the review and the changes, then:
+      ? `<div class="team-gate">${t.gaps
+          ? `<b>✓ The reviewer approved the work so far, but parts of the request aren't built yet:</b>
+             ${t.gapList ? `<article class="md team-gaps">${md(t.gapList)}</article>` : ''}
+             <div class="need-actions"><button class="small primary" data-team-act="fix-gaps" title="Another round, from analysis to review, for what is missing (and your note below)">Run a gap round</button></div>
+             <p class="hint">Or take the work as it is:</p>`
+          : '<b>✓ The reviewer approved it.</b> Look at the review and the changes, then:'}
           <div class="need-actions">${t.remote
-            ? '<button class="small primary" data-team-act="pr">Open a pull request</button>'
-            : `<button class="small primary" data-team-act="merge" title="Fast-forward ${esc(t.folder ?? '')} to the team's branch">Merge into main</button>
+            ? `<button class="small${t.gaps ? '' : ' primary'}" data-team-act="pr">Open a pull request</button>`
+            : `<button class="small${t.gaps ? '' : ' primary'}" data-team-act="merge" title="Fast-forward ${esc(t.folder ?? '')} to the team's branch">Merge into main</button>
                <button class="small" data-team-act="publish" title="The implementer creates a private GitHub repository, pushes and opens a pull request">Publish to GitHub</button>`}
             <button class="small" data-team-act="keep">Keep the branch${t.remote ? ', no PR' : ''}</button></div>
-          ${t.gaps ? `<p class="hint">The review lists parts of the request that aren't built yet${t.settings.gapRounds ? ` (the team's ${t.settings.gapRounds > 1 ? `${t.settings.gapRounds} gap rounds are` : 'gap round is'} used up)` : ''}. <b>Fix gaps</b> runs another round for them, from a new analysis.</p>` : ''}
-          <textarea id="team-note" rows="2" placeholder="Or say what should change; the implementer fixes it and it goes through test and review again"></textarea>
-          <div class="need-actions">${t.gaps ? '<button class="small" data-team-act="fix-gaps" title="Another round, from analysis to review, for what the review says is missing (and your note)">Fix gaps</button>' : ''}<button class="small" data-team-act="send-back">Send back</button></div></div>`
+          <textarea id="team-note" rows="2" placeholder="${t.gaps ? 'A note for the gap round, or' : 'Or say'} what should change; the implementer fixes it and it goes through test and review again"></textarea>
+          <div class="need-actions"><button class="small" data-team-act="send-back">Send back</button></div></div>`
       : t.stage === 'blocked'
         ? `<div class="team-gate blocked"><b>${esc(t.blocked.reason)}</b>
             <textarea id="team-note" rows="2" placeholder="Optional note for the next round"></textarea>
@@ -1200,9 +1204,10 @@ function renderTeam() {
               ${t.blocked.at === 'loops' ? '<button class="small" data-team-act="skip" title="Move to your final review without another round">Accept as is</button>' : ''}
             </div></div>`
         : t.stage === 'done' && t.gaps
-          ? `<div class="team-gate"><b>The last review lists parts of the request that aren't built yet.</b>
+          ? `<div class="team-gate"><b>The last review lists parts of the request that aren't built yet:</b>
+              ${t.gapList ? `<article class="md team-gaps">${md(t.gapList)}</article>` : ''}
               <textarea id="team-note" rows="2" placeholder="Optional note for the gap round"></textarea>
-              <div class="need-actions"><button class="small primary" data-team-act="fix-gaps">Fix gaps</button></div></div>`
+              <div class="need-actions"><button class="small primary" data-team-act="fix-gaps">Run a gap round</button></div></div>`
           : '';
   const quest = t.mode === 'lead' || t.quest > 1 ? `<p class="hint">Quest ${t.quest ?? 1}${t.gapRound ? ` · gap round ${t.gapRound}` : ''}${t.quests?.length ? ` · ${t.quests.length} earlier` : ''}</p>` : '';
   const handoffs = (list) =>
@@ -2990,7 +2995,7 @@ $('#new-form').addEventListener('submit', async (e) => {
         critics: Number(f.get('critics')),
         mode: f.get('teamMode') || undefined,
         testCommand: f.get('teamTest') || undefined,
-        // Empty: the defaults (3 each); gap rounds may be 0.
+        // Empty: the defaults (3 rounds each; gap rounds 0, so it asks first).
         ...Object.fromEntries(['maxRounds', 'maxLoops', 'gapRounds'].filter((k) => String(f.get(k) ?? '') !== '').map((k) => [k, Number(f.get(k))])),
         models,
         repo: f.get('repo') || undefined,
