@@ -45,6 +45,7 @@ import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
 import { Judge, clashPrompt, finishMessage, hash, reviewPrompt, screenPrompt, stripChrome, stuckPrompt } from './judge.js';
 import { findLocalUrls, findSignInLinks, parseCallback, parseUrl } from './preview.js';
 import { Plugins } from './plugins.js';
+import { teamDir, teamPrompt } from './teams.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
 import {
   bugFromRef,
@@ -506,6 +507,7 @@ export class AgentManager extends EventEmitter {
     priority,
     workspace,
     race,
+    team,
     engine,
     sessionId: adopt,
     imported,
@@ -562,7 +564,8 @@ export class AgentManager extends EventEmitter {
       permissionMode: permissionMode || this.config.permissionMode,
       model: model || null,
       // Review the implementation plan before the agent implements it: null = no review.
-      planReview: !general && (planReview ?? this.config.planReview ?? false) ? { status: 'writing' } : null,
+      // Team members get their review from the team instead.
+      planReview: !general && !team && (planReview ?? this.config.planReview ?? false) ? { status: 'writing' } : null,
       status: 'preparing',
       desired: start ? 'running' : 'stopped',
       error: null,
@@ -580,6 +583,7 @@ export class AgentManager extends EventEmitter {
       lastStartedAt: null,
       stoppedAt: null,
       ...(race ? { raceId: race.id, variant: race.variant } : {}),
+      ...(team ? { team } : {}),
       ...(imported ? { imported } : {}),
     };
     for (const pr of refs.prs) agent.prs[pr.url] = { ...pr, source: 'intent' };
@@ -820,7 +824,8 @@ export class AgentManager extends EventEmitter {
       sessionId: sid,
       resume,
       name: agent.name,
-      prompt: resume ? (handoff ? handoffMessage(agent) : null) : agent.intent,
+      // A team member's first message is its first step, not just the problem.
+      prompt: resume ? (handoff ? handoffMessage(agent) : null) : (agent.kickoff ?? agent.intent),
     });
     const proc = this.spawnAgent(agent, agent.workdir, args);
 
@@ -838,6 +843,7 @@ export class AgentManager extends EventEmitter {
       lastStartedAt: now(),
       sessions: agent.sessions,
       sessionId: sid,
+      kickoff: undefined,
       ...(handoff ? { planning: { ...agent.planning, ready: false, handedOffAt: now() } } : {}),
     });
     return this.view(this.store.get(agent.id));
@@ -866,6 +872,13 @@ export class AgentManager extends EventEmitter {
       prompts.push(agent.planReview.status === 'approved' ? planApprovedPrompt(file) : planReviewPrompt(file));
     }
     if (planning) prompts.push(planningPrompt(agent));
+    if (agent.team) {
+      // Team members write their handoff files in the team's folder.
+      fs.mkdirSync(teamDir(agent.team.id), { recursive: true });
+      const dir = fs.realpathSync(teamDir(agent.team.id));
+      writableDir = writableDir ? [writableDir, dir] : dir;
+      prompts.push(teamPrompt(agent.team.role, dir));
+    }
     // Appended system prompts last only for the process they're passed to, so they go on every launch.
     return { extra: engine.extraArgs(this.config), permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null };
   }
@@ -1124,7 +1137,9 @@ export class AgentManager extends EventEmitter {
     }
     await this.stop(agent.id);
     const warnings = [];
-    if (deleteWorkspace && agent.workdir) {
+    if (deleteWorkspace && agent.workdir && agent.sharedWith) {
+      warnings.push(`Kept ${agent.workdir}: it belongs to ${this.store.get(agent.sharedWith)?.name ?? 'another agent'}`);
+    } else if (deleteWorkspace && agent.workdir) {
       try {
         if (agent.worktree && agent.sourceDir) {
           await git.removeWorktree(agent.sourceDir, agent.workdir);
@@ -1933,7 +1948,8 @@ export class AgentManager extends EventEmitter {
 
       if (withPrs) {
         this.lastPrCheck.set(id, Date.now());
-        const branchPrs = await prsForBranch(agent.workdir, info?.branch);
+        // A shared worktree's pull requests belong to the agent that owns it.
+        const branchPrs = agent.sharedWith ? [] : await prsForBranch(agent.workdir, info?.branch);
         changed = this.mergeLinks(agent, agent.prs, branchPrs, (p) => p.url) || changed;
         // Fill in title/state for PRs we only know by URL, and keep open ones current.
         const stale = Object.values(agent.prs).filter(
@@ -2543,6 +2559,8 @@ export class AgentManager extends EventEmitter {
       const idleMs = this.judge.settings.idleSec * 1000;
       for (const [id, rt] of this.runtimes) {
         if (!rt.pty || rt.busy || rt.attention || rt.planning || rt.screenChecked || this.outbox.get(id)?.length) continue;
+        // A team member that finished its step is meant to sit idle until its next turn.
+        if (this.idleExpected?.(id)) continue;
         if (!rt.lastOutputAt || t - rt.lastOutputAt < idleMs) continue;
         // Output only right after launch (a resume repainting its screen) is not a turn worth reading.
         if (rt.lastOutputAt - rt.startedAt < this.judge.settings.warmupSec * 1000) continue;

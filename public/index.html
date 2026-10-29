@@ -192,6 +192,7 @@
           <label class="check"><input type="radio" name="when" value="now" checked /> Start now</label>
           <label class="check"><input type="radio" name="when" value="backlog" /> Queue in backlog</label>
           <label class="check" title="Several agents try the same intent; compare and keep the best"><input type="radio" name="when" value="race" /> Race variants</label>
+          <label class="check" title="Agents in roles solve one problem: analyze, critique, implement, test, review"><input type="radio" name="when" value="team" /> Team</label>
           <label class="check">Priority
             <select name="priority" aria-label="Priority">
               <option value="0">P0 urgent</option>
@@ -209,6 +210,27 @@
           <label>
             Test command <span class="hint">optional; run in each attempt's worktree to compare</span>
             <input name="testCommand" placeholder="npm test" />
+          </label>
+        </div>
+        <div class="team-only" hidden>
+          <p class="hint">An analyst writes the analysis and critics challenge it until they agree; then an implementer builds it, a tester tests it and a reviewer approves it or sends it back. The team stops for you when the reviewer approves, or if they can't agree. Tip: pick <b>Accept edits</b> or <b>Auto</b> as the permission mode, or the agents stop to ask before each edit or command.</p>
+          <div class="row">
+            <label>
+              Critics
+              <select name="critics">
+                <option value="0">None</option>
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+              </select>
+            </label>
+            <label>
+              Test command <span class="hint">optional; a hint for the tester</span>
+              <input name="teamTest" placeholder="npm test" />
+            </label>
+          </div>
+          <label>
+            Models by role <span class="hint">optional, e.g. <code>analyst=opus reviewer=opus</code>; others use the model above</span>
+            <input name="roleModels" placeholder="analyst=opus reviewer=opus" />
           </label>
         </div>
         <label class="check now-only">
@@ -290,6 +312,17 @@
         <span class="spacer"></span>
         <button type="button" id="import-go" class="primary" disabled>Continue</button>
       </div>
+    </dialog>
+
+    <dialog id="team-dialog" class="doc-dialog">
+      <div class="doc-head">
+        <h2 id="team-title">Team</h2>
+        <span class="spacer"></span>
+        <button type="button" id="team-stop" class="small ghost" title="Close the team's agents; nothing is deleted">Stop team</button>
+        <button type="button" id="team-delete" class="small ghost" title="Forget this team">Forget team</button>
+        <button type="button" id="team-close" class="small ghost">Close</button>
+      </div>
+      <div id="team-body" class="race-body team-body"></div>
     </dialog>
 
     <dialog id="race-dialog" class="doc-dialog">

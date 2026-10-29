@@ -27,6 +27,7 @@ No build step: Node ES modules on the server, plain ES modules in the browser. S
 | `src/inbox.js`, `src/stuck.js`, `src/conflicts.js` | The decision inbox (prompts and questions), stuck detection and the conflict radar: the rules that decide *when* to look. |
 | `src/judge.js` | The AI judge: one-shot, tool-less model calls that decide *what is going on* (stuck, waiting, done, collisions, backlog order, alert triage), with a daily cap and feedback examples. Falls back to the rules. |
 | `src/backlog.js`, `src/races.js` | Work orders picked up per project; several agents on one intent, compared. |
+| `src/teams.js` | Agents in roles on one problem: handoff files with a verdict line move the team from analysis to review. |
 | `src/notify.js` | Slack alerts, triaged by the judge. |
 | `src/preview.js`, `src/livebrowser.js` | Browser tabs: HTTPS relays for remote devices, and a headless Chrome streamed over the Chrome DevTools Protocol (frames, input, sound). |
 | `src/sessions.js` | Finds Claude Code sessions started in a terminal so they can be continued as agents. |

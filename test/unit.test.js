@@ -11,6 +11,7 @@ import { passEnv, plist, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
+import { VERDICTS, readVerdict, summarize, teamPrompt } from '../src/teams.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-unit-'));
 
@@ -647,4 +648,31 @@ test('notInstalled says what is missing and how to fix it', () => {
   assert.match(msg, /`claude` isn't on the daemon's PATH/);
   assert.match(msg, /AGENTMGR_CLAUDE_BIN/);
   assert.match(notInstalled(claude, { claudeBin: '/opt/x/claude' }), /\/opt\/x\/claude doesn't exist/);
+});
+
+test('team handoffs: the verdict line, in the forms models write it', () => {
+  assert.equal(readVerdict('# Review\nAll good.\n\nverdict: approve\n', VERDICTS.review), 'approve');
+  assert.equal(readVerdict('**Verdict:** Changes requested', VERDICTS.review), 'changes');
+  assert.equal(readVerdict('- verdict: `PASSED`', VERDICTS.test), 'pass');
+  assert.equal(readVerdict('verdict: agree\n...\nverdict: questions', VERDICTS.critique), 'questions', 'the last one wins');
+  assert.equal(readVerdict('Verdict: LGTM', VERDICTS.review), 'approve');
+  assert.equal(readVerdict('verdict: maybe', VERDICTS.review), null, 'not an allowed word');
+  assert.equal(readVerdict('No verdict here, the verdict is pending', VERDICTS.review), null);
+  assert.equal(readVerdict('verdict: done', VERDICTS.test), null, "another kind's word");
+});
+
+test('team handoffs: a summary line and role instructions', () => {
+  assert.equal(summarize('# Analysis\n\n## Problem\nTokens are dropped.\n- on rotation\n\nverdict: ready'), 'Tokens are dropped. - on rotation');
+  assert.ok(summarize('x '.repeat(400)).length <= 240);
+  const p = teamPrompt('tester', '/t/abc');
+  assert.match(p, /You are the tester on a team/);
+  assert.match(p, /do not fix product code/);
+  assert.match(p, /\/t\/abc/);
+  assert.match(p, /verdict: <word>/);
+});
+
+test('claude: several writable folders, each with write and edit allowed', () => {
+  const args = claude.optionArgs({ writableDir: ['/b', '/t'] });
+  assert.deepEqual(args, ['--add-dir', '/b', '/t', '--allowedTools', 'Write(//b/**)', 'Edit(//b/**)', 'Write(//t/**)', 'Edit(//t/**)']);
+  assert.deepEqual(claude.optionArgs({ writableDir: '/b' }), ['--add-dir', '/b', '--allowedTools', 'Write(//b/**)', 'Edit(//b/**)']);
 });

@@ -158,7 +158,7 @@ export default {
     // Inline mode keeps the conversation in the terminal's scrollback, which AI Agent Manager replays.
     const opts = [...extra, '--no-alt-screen', ...(MODES[permissionMode] ?? MODES.default)];
     if (model) opts.push('--model', model);
-    if (writableDir) opts.push('--add-dir', writableDir);
+    for (const d of [writableDir ?? []].flat()) opts.push('--add-dir', d);
     if (resume) return ['resume', ...opts, sessionId, ...(prompt ? [prompt] : [])];
     const first = [instructions, prompt && (instructions ? `Your task:\n${prompt}` : prompt)].filter(Boolean).join('\n\n---\n\n');
     return [...opts, ...(first ? [first] : [])];

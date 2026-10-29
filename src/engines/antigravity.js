@@ -109,7 +109,7 @@ export default {
   launchArgs({ extra = [], permissionMode, model, writableDir, instructions, sessionId, resume, prompt }) {
     const opts = [...extra, ...(MODES[permissionMode] ?? MODES.default)];
     if (model) opts.push('--model', model);
-    if (writableDir) opts.push('--add-dir', writableDir);
+    for (const d of [writableDir ?? []].flat()) opts.push('--add-dir', d);
     // "--flag=value" so a message starting with "-" isn't read as a flag.
     if (resume) return ['--conversation', sessionId, ...opts, ...(prompt ? [`--prompt-interactive=${prompt}`] : [])];
     const first = [instructions, prompt && (instructions ? `Your task:\n${prompt}` : prompt)].filter(Boolean).join('\n\n---\n\n');
