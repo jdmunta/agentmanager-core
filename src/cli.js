@@ -641,14 +641,16 @@ export async function main(argv) {
     .option('--role-model <role=model...>', 'model for one role, e.g. --role-model analyst=opus reviewer=opus')
     .option('--max-rounds <n>', 'analysis rounds before it asks you (default 3)')
     .option('--max-loops <n>', 'fix rounds before it asks you (default 3)')
+    .option('--separate', 'one agent per role instead of one lead session with sub-agents')
     .action(async (problem, opts) => {
       await daemon();
       const models = Object.fromEntries((opts.roleModel ?? []).map((p) => p.split('=')).filter(([k, v]) => k && v));
       const t = await api('POST', '/teams', {
         intent: problem, repo: opts.repo, dir: opts.dir, project: opts.project, base: opts.base, critics: Number(opts.critics),
         testCommand: opts.test, model: opts.model, models, maxRounds: opts.maxRounds, maxLoops: opts.maxLoops,
+        ...(opts.separate ? { mode: 'agents' } : {}),
       });
-      console.log(`${green('👥')} team ${bold(t.id)}: ${t.members.map((m) => `${m.role} (${m.id})`).join(', ')}`);
+      console.log(`${green('👥')} team ${bold(t.id)}: ${t.mode === 'lead' ? `lead ${t.members[0].id}, with ${t.subagents.map((r) => r.role).join(', ')} as sub-agents` : t.members.map((m) => `${m.role} (${m.id})`).join(', ')}`);
       if (t.newProject) console.log(dim(`  new project: ${t.newProject}`));
       console.log(dim(`  follow it: agentmgr team show ${t.id}`));
     });
@@ -664,8 +666,9 @@ export async function main(argv) {
         return table(list.map((t) => [t.id, t.name, t.stage, `${t.loop}`, t.intent.split('\n')[0].slice(0, 50)]), ['TEAM', 'NAME', 'STAGE', 'ROUND', 'PROBLEM']);
       }
       const t = await api('GET', `/teams/${id}`);
-      console.log(`${bold(t.name)}  ${t.stage}${t.blocked ? `: ${t.blocked.reason}` : ''}`);
-      console.log(dim(`  ${t.intent.split('\n')[0]}`));
+      console.log(`${bold(t.name)}  ${t.mode === 'lead' ? `quest ${t.quest} · ` : ''}${t.stage}${t.blocked ? `: ${t.blocked.reason}` : ''}`);
+      console.log(dim(`  ${(t.request ?? t.intent).split('\n')[0]}`));
+      for (const q of t.quests ?? []) console.log(dim(`  quest ${q.n}: ${q.request.split('\n')[0].slice(0, 60)} (${q.outcome})`));
       console.log(dim(`  folder ${t.dir}${t.branch ? ` · branch ${t.branch}` : ''}`));
       table(t.members.map((m) => [m.role + (m.n && t.settings.critics > 1 ? ` ${m.n}` : ''), m.id, m.status, m.turn ? 'its turn' : '', m.costUsd ? `$${m.costUsd.toFixed(2)}` : '']), ['ROLE', 'AGENT', 'STATUS', '', 'COST']);
       if (t.history.length) {
@@ -717,6 +720,16 @@ export async function main(argv) {
       await daemon();
       const t = await api('POST', `/teams/${id}/resume`, { action: 'skip' });
       console.log(`${green('→')} ${t.stage === 'ready' ? 'accepted; finalize when ready' : 'implementing the latest analysis'}`);
+    });
+  teamCmd
+    .command('ask')
+    .description("Give a team's lead new work: it runs it through the team as the next quest")
+    .argument('<team>')
+    .argument('<request>')
+    .action(async (id, request) => {
+      await daemon();
+      await api('POST', `/teams/${id}/ask`, { text: request });
+      console.log(`${green('→')} given to the lead`);
     });
   teamCmd
     .command('stop')

@@ -1687,11 +1687,11 @@ test('races: variants, scoreboard, tests in each worktree, diff, pick a winner a
   await call('DELETE', `/agents/${p.id}?deleteWorkspace=1`);
 });
 
-test('teams: analyst and critic align, implementer, tester and reviewer loop, you finalize at the end', async () => {
+test('teams, separate agents: analyst and critic align, implementer, tester and reviewer loop, you finalize at the end', async () => {
   const origin = makeOrigin('team');
   assert.equal((await call('POST', '/teams', { intent: ' ', repo: `file://${origin}` })).status, 400, 'needs a problem');
   assert.equal((await call('POST', '/teams', { intent: 'Fix it', repo: `file://${origin}`, critics: 3 })).status, 400);
-  const team = (await call('POST', '/teams', { intent: 'Make login survive token rotation', repo: `file://${origin}`, critics: 1, maxRounds: 2, maxLoops: 1, testCommand: 'npm test', models: { reviewer: 'opus' } })).body;
+  const team = (await call('POST', '/teams', { mode: 'agents', intent: 'Make login survive token rotation', repo: `file://${origin}`, critics: 1, maxRounds: 2, maxLoops: 1, testCommand: 'npm test', models: { reviewer: 'opus' } })).body;
   assert.deepEqual(team.members.map((m) => m.role), ['analyst', 'critic', 'implementer', 'tester', 'reviewer']);
   const id = (role) => team.members.find((m) => m.role === role).id;
   const teamNow = async () => (await call('GET', `/teams/${team.id}`)).body;
@@ -1800,13 +1800,13 @@ test('teams: a new project without a repository gets a git repo, and the work me
   fs.writeFileSync(path.join(messy, 'notes.txt'), 'x');
   assert.equal((await call('POST', '/teams', { intent: 'Build it', dir: messy })).status, 400, "a folder with files that isn't a repo");
 
-  const team = (await call('POST', '/teams', { intent: 'Build a tiny CLI that prints the date', critics: 0 })).body;
+  const team = (await call('POST', '/teams', { mode: 'agents', intent: 'Build a tiny CLI that prints the date', critics: 0 })).body;
   assert.equal(team.newProject, path.join(home, 'projects', 'build-a-tiny-cli-that-prints-the-date'));
   assert.equal(execFileSync('git', ['log', '--format=%s', 'main'], { cwd: team.newProject }).toString().trim(), 'Start the project');
   const owner = await runningAgent(team.members.find((m) => m.role === 'analyst').id).then(() => agentNow(team.members.find((m) => m.role === 'implementer').id));
   assert.ok(owner.worktree && owner.branch.startsWith('agent/'), 'the team works on its own branch');
   assert.equal(owner.sourceDir, fs.realpathSync(team.newProject));
-  const again = (await call('POST', '/teams', { intent: 'Build a tiny CLI that prints the date', critics: 0 })).body;
+  const again = (await call('POST', '/teams', { mode: 'agents', intent: 'Build a tiny CLI that prints the date', critics: 0 })).body;
   assert.equal(again.newProject, `${team.newProject}-2`, 'a new folder, not the same one');
   await call('DELETE', `/teams/${again.id}?agents=1`);
 
@@ -1833,6 +1833,93 @@ test('teams: a new project without a repository gets a git repo, and the work me
   assert.equal(merged.outcome, 'merged');
   assert.equal(fs.readFileSync(path.join(team.newProject, 'date.sh'), 'utf8'), 'date\n', "main has the team's work");
   await call('DELETE', `/teams/${team.id}?agents=1`);
+});
+
+test('teams, one lead session: the roles are its sub-agents; it stays and takes the next request as a new quest', async () => {
+  const origin = makeOrigin('teamlead');
+  assert.equal((await call('POST', '/teams', { mode: 'lead', engine: 'codex', intent: 'Fix it', repo: `file://${origin}` })).status, 400, 'Codex has no sub-agents');
+  const team = (await call('POST', '/teams', { intent: 'Make logout clear every token', repo: `file://${origin}`, critics: 1, maxRounds: 2, testCommand: 'npm test', models: { reviewer: 'opus' } })).body;
+  assert.equal(team.mode, 'lead', 'one lead session by default');
+  assert.deepEqual(team.members.map((m) => m.role), ['lead']);
+  assert.deepEqual(team.subagents.map((r) => r.role), ['analyst', 'critic', 'implementer', 'tester', 'reviewer']);
+  const lead = await runningAgent(team.members[0].id);
+  assert.ok(lead.worktree && lead.branch.startsWith('agent/'));
+  const launch = await waitFor(() => launches().find((l) => l.args.includes(lead.sessionId)), 10000, 'lead launch');
+  const subs = JSON.parse(launch.args[launch.args.indexOf('--agents') + 1]);
+  assert.deepEqual(Object.keys(subs), ['analyst', 'critic', 'implementer', 'tester', 'reviewer']);
+  assert.equal(subs.reviewer.model, 'opus');
+  assert.match(subs.tester.prompt, /do not fix product code[\s\S]*verdict: <word>" using one of: pass, fail/);
+  const system = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
+  assert.match(system, /You lead a team of AI agents/);
+  assert.match(system, /At most 2 rounds/);
+  assert.match(system, /npm test/);
+  assert.match(system, /You stay after a quest ends/);
+  assert.match(launch.args[launch.args.indexOf('--') + 1], /Problem to solve:\nMake logout clear every token[\s\S]*quest 1[\s\S]*quest-1\/analysis-1\.md/);
+
+  const teamNow = async () => (await call('GET', `/teams/${team.id}`)).body;
+  const stage = (want, extra = () => true) => waitFor(async () => {
+    const t = await teamNow();
+    return t.stage === want && extra(t) ? t : null;
+  }, 20000, `lead team ${want}`);
+  const hand = (file, text, quest = 1) => {
+    const f = path.join(team.dir, `quest-${quest}`, file);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, text);
+    const past = new Date(Date.now() - 5000);
+    fs.utimesSync(f, past, past);
+  };
+  hand('analysis-1.md', 'Logout keeps the refresh token.\nverdict: ready\n');
+  await stage('discuss');
+  hand('critique-1-1.md', '1. [must] Cover other tabs.\nverdict: changes\n');
+  hand('analysis-2.md', 'Also other tabs.\nverdict: ready\n');
+  await stage('discuss', (t) => t.round === 2);
+  hand('critique-2-1.md', 'Good.\nverdict: agree\n');
+  await stage('implement');
+  hand('analysis.md', 'Also other tabs.\nverdict: ready\n'); // the lead's copy: not a handoff
+  hand('implementation-1.md', 'Done.\nverdict: done\n');
+  hand('test-1.md', 'Green.\nverdict: passed\n');
+  hand('review-1.md', 'Approved.\nverdict: approve\n');
+  const ready = await stage('ready');
+  assert.deepEqual(ready.history.map((h) => `${h.role}:${h.verdict}`), ['analyst:ready', 'critic:changes', 'analyst:ready', 'critic:agree', 'implementer:done', 'tester:pass', 'reviewer:approve']);
+  assert.ok(manager.idleExpected(lead.id), 'the lead waits for you without the judge calling it stuck');
+
+  // Send back: the lead gets your note; the lead's blocked file stops the team; you accept as is.
+  const back = (await call('POST', `/teams/${team.id}/send-back`, { note: 'Log the logout' })).body;
+  assert.equal(back.stage, 'implement');
+  await waitFor(async () => (await agentNow(lead.id)).outbox === 0, 20000, 'note typed into the lead');
+  hand('blocked-1.md', 'The reviewer and the implementer disagree on logging.\nverdict: blocked\n');
+  const blocked = await stage('blocked');
+  assert.equal(blocked.blocked.at, 'loops');
+  assert.match(blocked.blocked.reason, /disagree on logging/);
+  await call('POST', `/teams/${team.id}/resume`, { action: 'skip' });
+  await stage('ready');
+
+  // Finalize: the lead opens the PR and writes final.md.
+  assert.equal((await call('POST', `/teams/${team.id}/finalize`, { mode: 'pr' })).body.stage, 'finalizing');
+  hand('final.md', 'https://github.com/example/repo/pull/9\nverdict: done\n');
+  const done = await stage('done');
+  assert.equal(done.outcome, 'pr');
+  assert.match((await call('GET', `/teams/${team.id}/files/quest-1%2Ffinal.md`)).body.markdown, /pull\/9/);
+  assert.ok(manager.idleExpected(lead.id), 'between quests the lead just waits');
+  assert.equal((await agentNow(lead.id)).status, 'running', 'the lead stays');
+
+  // The next request: from the team view (or typed in the lead's terminal), the lead opens quest 2.
+  assert.equal((await call('POST', `/teams/${team.id}/ask`, { text: ' ' })).status, 400);
+  await call('POST', `/teams/${team.id}/ask`, { text: 'Also expire tokens after a week' });
+  await waitFor(async () => (await agentNow(lead.id)).outbox === 0, 60000, 'request typed into the lead');
+  hand('request.md', '# Request\nExpire tokens after a week.\n', 2);
+  const q2 = await stage('analyze', (t) => t.quest === 2);
+  assert.equal(q2.request, 'Expire tokens after a week.');
+  assert.deepEqual(q2.history, []);
+  assert.equal(q2.quests.length, 1);
+  assert.equal(q2.quests[0].outcome, 'pr');
+  assert.equal(q2.quests[0].history.length, 9);
+  hand('analysis-1.md', 'Add an expiry.\nverdict: ready\n', 2);
+  const q2d = await stage('discuss', (t) => t.quest === 2);
+  assert.equal(q2d.history[0].file, 'quest-2/analysis-1.md');
+  await call('DELETE', `/teams/${team.id}?agents=1`);
+  assert.equal((await call('GET', `/agents/${lead.id}`)).status, 404);
+  assert.ok(!fs.existsSync(lead.workdir));
 });
 
 test('hub: invite, join, fleet view, signed reconnects, forged runners refused, remove, leave', async () => {

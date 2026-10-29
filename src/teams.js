@@ -12,6 +12,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { expandHome, paths } from './config.js';
+import { engineOf } from './engines/index.js';
 import * as git from './git.js';
 
 const err = (status, message) => Object.assign(new Error(message), { status });
@@ -28,7 +29,18 @@ export const VERDICTS = {
   test: ['pass', 'fail'],
   review: ['approve', 'changes'],
   final: ['done'],
+  blocked: ['blocked'],
 };
+/** Handoff file names a lead's sub-agents write: kind, role and which round. */
+const FILES = [
+  [/^analysis-(\d+)\.md$/, 'analysis', 'analyst'],
+  [/^critique-(\d+)-(\d+)\.md$/, 'critique', 'critic'],
+  [/^implementation-(\d+)\.md$/, 'implementation', 'implementer'],
+  [/^test-(\d+)\.md$/, 'test', 'tester'],
+  [/^review-(\d+)\.md$/, 'review', 'reviewer'],
+  [/^blocked-(\d+)\.md$/, 'blocked', 'lead'],
+  [/^final\.md$/, 'final', 'lead'],
+];
 const SYNONYMS = {
   agreed: 'agree', approved: 'approve', lgtm: 'approve', passed: 'pass', passes: 'pass', failed: 'fail', fails: 'fail',
   complete: 'done', completed: 'done', finished: 'done', question: 'questions', change: 'changes', request: 'changes',
@@ -119,6 +131,72 @@ export function teamPrompt(role, dir) {
   ].join('\n\n');
 }
 
+const SUB_ROLES = ['analyst', 'critic', 'implementer', 'tester', 'reviewer'];
+const SUB_DESCRIPTION = {
+  analyst: "The team's analyst: studies the problem and the code and writes the analysis file. Use it for the team's analysis step.",
+  critic: "The team's critic: challenges the analysis and writes a critique file. Use it for the team's discussion step.",
+  implementer: "The team's implementer: builds the agreed analysis, commits, and writes implementation notes. Use it for the team's implementation step.",
+  tester: "The team's tester: tests the implementation and writes a test report. Use it for the team's test step.",
+  reviewer: "The team's reviewer: reviews the change and writes a review. Use it for the team's review step.",
+};
+const KIND_OF = { analyst: 'analysis', critic: 'critique', implementer: 'implementation', tester: 'test', reviewer: 'review' };
+
+/** The lead's sub-agents, for Claude Code's --agents: one per role, each writing its own handoff files. */
+export function subagents(team, dir) {
+  return Object.fromEntries(
+    SUB_ROLES.filter((r) => r !== 'critic' || team.settings.critics).map((role) => [
+      role,
+      {
+        description: SUB_DESCRIPTION[role],
+        prompt: [
+          DUTIES[role],
+          `You work for the lead of a team of AI agents. The lead's message tells you which files to read and which file to write in the team folder ${dir}. ` +
+            `Write that file, and end it with a line "verdict: <word>" using one of: ${VERDICTS[KIND_OF[role]].join(', ')}. ` +
+            "Then reply to the lead in two or three lines: what you concluded, and your verdict. Don't write other roles' files.",
+        ].join('\n\n'),
+        ...(team.settings.models?.[role] ? { model: team.settings.models[role] } : {}),
+      },
+    ]),
+  );
+}
+
+/**
+ * Instructions for a team's lead: run the pipeline through sub-agents for each request (a quest),
+ * stop for the person at the end of each, and stay for the next request.
+ */
+export function leadPrompt(team, dir, baseRef) {
+  const s = team.settings;
+  const f = (name) => path.join(dir, 'quest-<n>', name);
+  const steps = [
+    `1. Analysis: ask the analyst sub-agent to write ${f('analysis-1.md')}.`,
+    s.critics
+      ? `2. Discussion: ask ${s.critics === 2 ? 'two critic sub-agents (in parallel), critic 1 and critic 2,' : 'the critic sub-agent'} to review the latest analysis and write ${f('critique-<round>-<critic number>.md')}. ` +
+        `If every critic's verdict is "agree", go on. Otherwise ask the analyst to address every point in ${f('analysis-<round + 1>.md')} (changing the analysis or saying why not), then ask the critics again. ` +
+        `At most ${s.maxRounds} rounds: if they still don't agree, write ${f('blocked-1.md')} (the next free number) saying what they disagree on, end it with "verdict: blocked", and stop.`
+      : '2. There are no critics on this team: go on with the analysis as it is.',
+    `3. Copy the agreed (latest) analysis to ${f('analysis.md')}.`,
+    `4. Implementation: ask the implementer sub-agent to implement ${f('analysis.md')} in this working copy, commit on the current branch (no push, no pull request), and write ${f('implementation-<round>.md')}, starting at round 1. If its verdict is "blocked", write a blocked file as above and stop.`,
+    `5. Test: ask the tester sub-agent to test it and write ${f('test-<round>.md')}${s.testCommand ? ` (the project's test command is: ${s.testCommand})` : ''}. On "fail", start the next implementation round with the test report.`,
+    `6. Review: ask the reviewer sub-agent to review the change${baseRef ? ` (git diff ${baseRef.split(' @ ')[1] ?? baseRef}...HEAD)` : ''} against the analysis and the test report, and write ${f('review-<round>.md')}. On "changes", start the next implementation round with the review.`,
+    `At most ${s.maxLoops} implementation rounds: if the work is still sent back after that, write a blocked file saying what is left, and stop.`,
+    '7. When the reviewer approves: stop. Tell the person in a few lines what the team built and what the reviewer said, and wait for their decision. Do not push, merge or open a pull request unless the person tells you to.',
+  ];
+  const quests =
+    `Each request the team works on is a quest with its own folder: the first problem is quest 1, in ${path.join(dir, 'quest-1')}. ` +
+    "You stay after a quest ends. When the person asks for new work in this conversation (a feature, a fix, a change), it is the next quest: " +
+    `first write the request in its own words to ${path.join(dir, 'quest-<next n>', 'request.md')}, then run the same steps for it in that folder, starting again at analysis-1.md and implementation round 1, on the same branch. ` +
+    "A question about the team's work isn't a quest: just answer it.";
+  return [
+    `You lead a team of AI agents solving one problem: ${SUB_ROLES.filter((r) => r !== 'critic' || s.critics).join(', ')}. They are your sub-agents (the Agent tool).`,
+    "You coordinate; you don't do their work. Delegate each step to the sub-agent for that role, give it the problem and exactly the file paths to read and to write, " +
+      'and read the verdict line at the end of the file it wrote. Every handoff goes through these files in the team folder; AI Agent Manager reads them to show the person how the team is doing. ' +
+      'Never write an analysis, critique, implementation note, test report or review yourself. If a file has no verdict line, ask that sub-agent to add it.',
+    quests,
+    `The steps of a quest (<n> is its number):\n${steps.join('\n')}`,
+    'Questions only the person can answer go in your questions file, as usual; keep the team going on a sensible default meanwhile.',
+  ].join('\n\n');
+}
+
 export class Teams extends EventEmitter {
   constructor({ manager, store, config = {} }) {
     super();
@@ -131,7 +209,7 @@ export class Teams extends EventEmitter {
       for (const team of Object.values(store.data.teams)) {
         const m = this.memberList(team).find((x) => x.id === id);
         if (!m) continue;
-        if (team.waiting.some((w) => w.member === id)) this.block(team, `The ${m.role} (${m.name}) was deleted`, 'member');
+        if (team.mode === 'lead' ? ACTIVE.has(team.stage) : team.waiting.some((w) => w.member === id)) this.block(team, `The ${m.role} (${m.name}) was deleted`, 'member');
         else this.save(team);
       }
     });
@@ -139,13 +217,18 @@ export class Teams extends EventEmitter {
     manager.idleExpected = (id) => {
       const a = store.get(id);
       const team = a?.team && store.data.teams[a.team.id];
-      return Boolean(team) && !team.waiting.some((w) => w.member === id && !w.verdict);
+      if (!team) return false;
+      // A lead is meant to work until the team stops for the person.
+      if (team.mode === 'lead') return !ACTIVE.has(team.stage);
+      return !team.waiting.some((w) => w.member === id && !w.verdict);
     };
     // Messages still queued when the daemon stopped are gone; say them again (a first message
     // is kept on the agent and starts it on resume).
     this.resendTimer = setTimeout(() => {
       for (const team of Object.values(store.data.teams)) {
         if (!ACTIVE.has(team.stage)) continue;
+        const lead = team.mode === 'lead' && this.manager.store.get(team.members.lead);
+        if (lead?.lastStartedAt) this.manager.tell(lead.id, `AI Agent Manager restarted while the team was working, which may have cut a sub-agent off. Check the team folder ${team.dir} and continue from where the team stopped.`, { source: 'team' });
         for (const w of team.waiting) {
           const a = this.manager.store.get(w.member);
           if (w.verdict || !w.text || !a?.lastStartedAt || fs.existsSync(this.path(team, w.file))) continue;
@@ -177,6 +260,7 @@ export class Teams extends EventEmitter {
   /** Members in pipeline order: { role, n, id, name }. */
   memberList(team) {
     const m = team.members;
+    if (team.mode === 'lead') return [{ role: 'lead', id: m.lead, name: this.manager.store.get(m.lead)?.name ?? null }];
     return [
       { role: 'analyst', id: m.analyst },
       ...m.critics.map((id, i) => ({ role: 'critic', n: i + 1, id })),
@@ -190,12 +274,24 @@ export class Teams extends EventEmitter {
    * One problem, a team of agents. Needs a repository URL, a git folder or a project (the team
    * works in one worktree). critics: 0-2. models / engines: per role, e.g. { reviewer: "opus" }.
    */
-  create({ intent, name, critics, maxRounds, maxLoops, testCommand, models, engines, ...opts } = {}) {
+  create({ intent, name, critics, maxRounds, maxLoops, testCommand, models, engines, mode, ...opts } = {}) {
     intent = String(intent ?? '').trim();
     if (!intent) throw err(400, 'Describe the problem for the team');
     const defaults = this.config.teams ?? {};
     const n = Number(critics ?? defaults.critics ?? 1);
     if (!Number.isInteger(n) || n < 0 || n > 2) throw err(400, 'critics must be 0, 1 or 2');
+    // "lead": one session whose sub-agents play the roles (needs an engine with sub-agents);
+    // "agents": one agent per role, each on any engine.
+    const asked = mode;
+    mode ??= defaults.mode ?? 'lead';
+    if (!['lead', 'agents'].includes(mode)) throw err(400, 'mode must be "lead" or "agents"');
+    const roleEngines = { ...defaults.engines, ...engines };
+    const leadEngine = engineOf(opts.engine || this.config.engine || 'claude');
+    const noSubagents = !leadEngine.supports.subagents ? `${leadEngine.label} has no sub-agents` : Object.values(roleEngines).some(Boolean) ? 'Roles on other engines need agents of their own' : null;
+    if (mode === 'lead' && noSubagents) {
+      if (asked === 'lead') throw err(400, `${noSubagents}: use separate agents (mode "agents")`);
+      mode = 'agents';
+    }
     const limit = (v, d) => Math.min(10, Math.max(1, Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : d));
     const id = `t${crypto.randomBytes(3).toString('hex')}`;
     const slug = (name || intent).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24).replace(/-+$/, '') || 'team';
@@ -224,12 +320,20 @@ export class Teams extends EventEmitter {
       maxLoops: limit(maxLoops, defaults.maxLoops ?? 3),
       testCommand: testCommand?.trim() || defaults.testCommand || null,
       models: { ...defaults.models, ...models },
-      engines: { ...defaults.engines, ...engines },
+      engines: roleEngines,
     };
-    const team = { id, name: name?.trim() || slug, intent, dir, newProject, createdAt: now(), updatedAt: now(), settings, stage: 'analyze', round: 1, loop: 1, extraRounds: 0, extraLoops: 0, waiting: [], history: [], blocked: null, outcome: null, members: { critics: [] } };
+    const team = { id, mode, name: name?.trim() || slug, intent, dir, newProject, createdAt: now(), updatedAt: now(), settings, stage: 'analyze', round: 1, loop: 1, extraRounds: 0, extraLoops: 0, waiting: [], history: [], blocked: null, outcome: null, members: { critics: [] } };
     this.store.data.teams[id] = team;
 
     const base = { ...opts, intent, start: false, planReview: false };
+    if (mode === 'lead') {
+      team.members = { lead: this.manager.create({ ...base, name: slug, worktree: true, model: settings.models.lead || opts.model, team: { id, role: 'lead' } }).id };
+      Object.assign(team, { seen: {}, quest: 1, quests: [] });
+      fs.mkdirSync(this.questPath(team, ''), { recursive: true });
+      this.send(team, team.members.lead, `This is quest 1. Start the team: ask the analyst for the analysis (${this.questPath(team, 'analysis-1.md')}).`);
+      this.save(team);
+      return this.view(id);
+    }
     const make = (role, extra = {}) =>
       this.manager.create({
         ...base,
@@ -262,6 +366,11 @@ export class Teams extends EventEmitter {
     return path.join(team.dir, file);
   }
 
+  /** Where a lead's current quest keeps its files (other teams use the team folder itself). */
+  questPath(team, file) {
+    return team.mode === 'lead' ? path.join(team.dir, `quest-${team.quest ?? 1}`, file) : this.path(team, file);
+  }
+
   /** Give out the next step: each task names the member, the file it writes and the message it gets. */
   assign(team, tasks) {
     team.waiting = tasks.map(({ role, member, kind, file, n, text }) => ({ role, member, kind, file, ...(n ? { n } : {}), text, since: now() }));
@@ -284,13 +393,135 @@ export class Teams extends EventEmitter {
   /** Read finished handoff files and move the team on. */
   poll() {
     for (const team of Object.values(this.store.data.teams)) {
-      if (!ACTIVE.has(team.stage) || !team.waiting.length) continue;
+      // A lead stays between quests: its team is followed until it is stopped.
+      if (team.mode === 'lead' ? team.stage === 'stopped' : !ACTIVE.has(team.stage) || !team.waiting.length) continue;
       try {
-        this.check(team);
+        if (team.mode === 'lead') this.observe(team);
+        else this.check(team);
       } catch (e) {
         console.error(`[agentmgr] team ${team.id}: ${e.message}`);
       }
     }
+  }
+
+  /**
+   * A lead's team: read the handoff files its sub-agents write, in the order they were written,
+   * and follow along. The lead runs the pipeline; this only records it and notices the stops.
+   */
+  observe(team) {
+    let changed = false;
+    // A new quest folder with its request: the lead took on new work.
+    let top = team.quest ?? 1;
+    try {
+      for (const d of fs.readdirSync(team.dir)) {
+        const n = Number(/^quest-(\d+)$/.exec(d)?.[1]);
+        if (n > top && fs.existsSync(path.join(team.dir, d, 'request.md'))) top = n;
+      }
+    } catch {
+      return;
+    }
+    if (top > (team.quest ?? 1)) {
+      this.nextQuest(team, top);
+      changed = true;
+    }
+    let files;
+    try {
+      files = fs.readdirSync(this.questPath(team, '')).map((name) => ({ name, mtime: fs.statSync(this.questPath(team, name)).mtimeMs }));
+    } catch {
+      if (changed) this.save(team);
+      return;
+    }
+    // Oldest first; files written at the same moment in pipeline order.
+    const rank = (name) => {
+      const m = /^(analysis|critique|implementation|test|review)-(\d+)/.exec(name);
+      if (!m) return 1e6;
+      const step = { analysis: 0, critique: 1, implementation: 0, test: 1, review: 2 }[m[1]];
+      return (['analysis', 'critique'].includes(m[1]) ? 0 : 1000) + Number(m[2]) * 10 + step;
+    };
+    for (const { name, mtime } of files.sort((a, b) => a.mtime - b.mtime || rank(a.name) - rank(b.name))) {
+      const rel = `quest-${team.quest}/${name}`;
+      if (team.seen[rel] === mtime || Date.now() - mtime < 1500) continue;
+      const hit = FILES.map(([re, kind, role]) => [re.exec(name), kind, role]).find(([m]) => m);
+      if (!hit) continue;
+      const [m, kind, role] = hit;
+      const text = fs.readFileSync(this.questPath(team, name), 'utf8');
+      const verdict = readVerdict(text, VERDICTS[kind]);
+      if (!verdict) continue; // still being written, or the lead asks for the verdict line
+      team.seen[rel] = mtime;
+      const num = Number(m[1] ?? 0);
+      const entry = { at: now(), stage: team.stage, round: kind === 'analysis' || kind === 'critique' ? num : team.round, loop: ['implementation', 'test', 'review'].includes(kind) ? num : team.loop, role, ...(kind === 'critique' ? { n: Number(m[2]) } : {}), member: team.members.lead, file: rel, verdict, summary: summarize(text) };
+      // A rewritten file replaces its entry.
+      team.history = team.history.filter((h) => h.file !== rel).concat(entry);
+      if (kind === 'analysis') team.round = Math.max(team.round, num);
+      if (['implementation', 'test', 'review'].includes(kind)) team.loop = Math.max(team.loop, num);
+      team.stage = this.leadStage(team, kind, verdict, num);
+      if (kind === 'blocked') team.blocked = { reason: entry.summary || 'The team stopped', at: team.history.some((h) => h.role === 'implementer') ? 'loops' : 'discuss', since: now() };
+      if (kind === 'final') Object.assign(team, { outcome: 'pr', finishedAt: now() });
+      changed = true;
+    }
+    if (changed) this.save(team);
+  }
+
+  /** The lead started quest n: file the current one under earlier quests and follow the new one. */
+  nextQuest(team, n) {
+    team.quests ??= [];
+    team.quests.push({
+      n: team.quest ?? 1,
+      request: team.request ?? team.intent,
+      stage: team.stage,
+      outcome: team.outcome ?? (team.stage === 'ready' ? 'approved, left as is' : team.stage === 'done' ? 'done' : `left at ${team.stage}`),
+      history: team.history,
+      finishedAt: now(),
+    });
+    let request = '';
+    try {
+      request = fs.readFileSync(path.join(team.dir, `quest-${n}`, 'request.md'), 'utf8').replace(/^#.*\n/, '').trim();
+    } catch {}
+    Object.assign(team, { quest: n, request: request || `Quest ${n}`, stage: 'analyze', round: 1, loop: 1, history: [], blocked: null, outcome: null, finishedAt: null });
+  }
+
+  /** Give the lead new work from the team view or the CLI: it becomes the next quest. */
+  ask(id, text) {
+    const team = this.get(id);
+    if (team.mode !== 'lead') throw err(409, 'Only a team with a lead takes new requests; start a new team');
+    if (team.stage === 'stopped') throw err(409, 'The team is stopped');
+    text = String(text ?? '').trim();
+    if (!text) throw err(400, 'Say what the team should do');
+    this.manager.tell(team.members.lead, `New work from the person, for the next quest (${team.quest + 1}):\n${text}`, { source: 'team' });
+    return this.view(id);
+  }
+
+  /** Where a lead's team stands after a handoff file. */
+  leadStage(team, kind, verdict, num) {
+    switch (kind) {
+      case 'analysis':
+        return team.settings.critics ? 'discuss' : 'implement';
+      case 'critique': {
+        const round = team.history.filter((h) => h.role === 'critic' && h.round === num);
+        return round.length >= team.settings.critics && round.every((h) => h.verdict === 'agree') ? 'implement' : 'discuss';
+      }
+      case 'implementation':
+        return verdict === 'done' ? 'test' : 'implement';
+      case 'test':
+        return verdict === 'pass' ? 'review' : 'implement';
+      case 'review':
+        return verdict === 'approve' ? 'ready' : 'implement';
+      case 'blocked':
+        return 'blocked';
+      case 'final':
+        return 'done';
+      default:
+        return team.stage;
+    }
+  }
+
+  /** Tell a lead's team what the person decided; the lead carries it out. */
+  toLead(team, text, stage) {
+    team.stage = stage;
+    team.blocked = null;
+    this.manager.tell(team.members.lead, text, { source: 'team' });
+    this.save(team);
+    return this.view(team.id);
   }
 
   check(team) {
@@ -459,6 +690,15 @@ export class Teams extends EventEmitter {
     note = note?.trim() || null;
     const at = team.blocked.at;
     if (at === 'member') throw err(409, 'A member was deleted; stop the team instead');
+    if (team.mode === 'lead') {
+      const from = note ? `\n\nFrom the person:\n${note}` : '';
+      if (action === 'skip') {
+        if (at === 'discuss') return this.toLead(team, `The person read the disagreement and wants the latest analysis implemented as it is: copy it to ${this.questPath(team, 'analysis.md')} and go on with the implementer.${from}`, 'implement');
+        return this.toLead(team, `The person accepted the work as it is. Wait for their decision; don't push or open a pull request yet.${from}`, 'ready');
+      }
+      if (action !== 'continue') throw err(400, 'action must be "continue" or "skip"');
+      return this.toLead(team, `The person read why the team stopped and wants one more ${at === 'discuss' ? 'analysis round' : 'implementation round'}, beyond the limit.${from}\n\nContinue from where the team stopped.`, at === 'discuss' ? 'analyze' : 'implement');
+    }
     team.blocked = null;
     if (action === 'skip') {
       if (at === 'discuss') {
@@ -491,6 +731,9 @@ export class Teams extends EventEmitter {
     if (team.stage !== 'ready') throw err(409, 'The team has nothing waiting for your review');
     note = note?.trim();
     if (!note) throw err(400, 'Say what should change');
+    if (team.mode === 'lead') {
+      return this.toLead(team, `The person reviewed the team's work and sent it back:\n${note}\n\nStart implementation round ${team.loop + 1} with this (beyond the limit if needed), then test and review again, and stop for the person when the reviewer approves.`, 'implement');
+    }
     team.extraLoops++;
     this.nextLoop(team, `The person reviewed the team's work and sent it back:\n${note}`);
     this.save(team);
@@ -507,7 +750,7 @@ export class Teams extends EventEmitter {
     if (team.stage !== 'ready') throw err(409, 'The team has nothing waiting for your review');
     mode ??= pr === false ? 'keep' : 'pr';
     if (!['pr', 'publish', 'merge', 'keep'].includes(mode)) throw err(400, 'mode must be pr, publish, merge or keep');
-    const owner = this.manager.store.get(team.members.implementer);
+    const owner = this.manager.store.get(team.members.implementer ?? team.members.lead);
     if (mode === 'keep' || mode === 'merge') {
       if (mode === 'merge') await this.merge(owner);
       Object.assign(team, { stage: 'done', outcome: mode === 'merge' ? 'merged' : 'kept', finishedAt: now() });
@@ -516,10 +759,12 @@ export class Teams extends EventEmitter {
     }
     const remote = owner?.workdir && (await git.hasRemote(owner.workdir));
     if (mode === 'pr' && !remote) throw err(409, 'This project has no remote to open a pull request on: publish it to GitHub, merge into main, or keep the branch');
-    const files = `the files are in ${team.dir}`;
+    const files = `the files are in ${this.questPath(team, '')}`;
     const publish = !remote
       ? `This project has no GitHub repository yet. Create a private one named "${path.basename(owner?.sourceDir ?? team.name)}" with \`gh repo create <name> --private --source ${owner?.sourceDir ?? '.'} --remote origin\`, push the base branch and this branch to it, then open`
       : 'Push the branch and open';
+    const finalText = `The person approved the team's work. ${publish} a pull request with a title from the problem and a body that summarizes the analysis, the changes, the test report and the review (${files}). Then write the pull request's link to ${this.questPath(team, 'final.md')} and end it with "verdict: done".`;
+    if (team.mode === 'lead') return this.toLead(team, finalText, 'finalizing');
     team.stage = 'finalizing';
     this.assign(team, [{
       role: 'implementer', member: team.members.implementer, kind: 'final', file: 'final.md',
@@ -560,8 +805,9 @@ export class Teams extends EventEmitter {
     this.emit('removed', id);
     if (agents) {
       // The owner last, so the shared worktree goes when nobody else is in it.
-      for (const m of this.memberList(team).filter((x) => x.role !== 'implementer')) if (this.manager.store.get(m.id)) await this.manager.remove(m.id).catch(() => {});
-      if (this.manager.store.get(team.members.implementer)) await this.manager.remove(team.members.implementer, { deleteWorkspace: true }).catch(() => {});
+      const ownerId = team.members.implementer ?? team.members.lead;
+      for (const m of this.memberList(team).filter((x) => x.id !== ownerId)) if (this.manager.store.get(m.id)) await this.manager.remove(m.id).catch(() => {});
+      if (this.manager.store.get(ownerId)) await this.manager.remove(ownerId, { deleteWorkspace: true }).catch(() => {});
       fs.rmSync(team.dir, { recursive: true, force: true });
     }
     return { ok: true };
@@ -570,7 +816,7 @@ export class Teams extends EventEmitter {
   /** One handoff file's text. */
   file(id, name) {
     const team = this.get(id);
-    if (!/^[\w.-]+\.md$/.test(name)) throw err(400, 'Not a team file');
+    if (!/^(quest-\d+\/)?[\w-][\w.-]*\.md$/.test(name)) throw err(400, 'Not a team file');
     try {
       return { name, markdown: fs.readFileSync(this.path(team, name), 'utf8') };
     } catch {
@@ -591,18 +837,21 @@ export class Teams extends EventEmitter {
         model: a?.model ?? null,
         engine: a?.engine ?? null,
         costUsd: costs.length ? costs.reduce((x, y) => x + y, 0) : null,
-        turn: team.waiting.some((w) => w.member === m.id && !w.verdict),
+        turn: team.mode === 'lead' ? ACTIVE.has(team.stage) : team.waiting.some((w) => w.member === m.id && !w.verdict),
       };
     });
     let files = [];
     try {
-      files = fs.readdirSync(team.dir).filter((f) => f.endsWith('.md')).sort();
+      files = fs.readdirSync(this.questPath(team, '')).filter((f) => f.endsWith('.md')).sort();
     } catch {}
     const costs = members.map((m) => m.costUsd).filter((c) => c != null);
-    const owner = this.manager.store.get(team.members.implementer);
+    const owner = this.manager.store.get(team.members.implementer ?? team.members.lead);
     return {
       ...team,
+      mode: team.mode ?? 'agents',
       members,
+      // A lead's roles, played by its sub-agents.
+      subagents: team.mode === 'lead' ? SUB_ROLES.filter((r) => r !== 'critic' || team.settings.critics).map((role) => ({ role, model: team.settings.models?.[role] ?? null })) : [],
       files,
       branch: owner?.branch ?? null,
       folder: owner?.sourceDir ?? owner?.workdir ?? null,

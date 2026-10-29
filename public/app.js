@@ -866,11 +866,12 @@ function needsFor(a, { both = false } = {}) {
   for (const g of a.conflicts ?? []) if (both || g.mergeFirst !== a.id) items.push({ a, kind: 'conflict', key: `conflict:${a.id}:${g.agent.id}`, g });
   return items;
 }
-/** Teams waiting on you (approved, or stuck on a disagreement), shown on the implementer. */
+/** Teams waiting on you (approved, or stuck on a disagreement), shown on the lead or the implementer. */
+const teamOwner = (t) => t.members.find((m) => m.role === 'lead' || m.role === 'implementer')?.id;
 function teamNeeds() {
   return [...teams.values()]
-    .filter((t) => ['ready', 'blocked'].includes(t.stage) && agents.has(t.members.find((m) => m.role === 'implementer')?.id))
-    .map((t) => ({ a: agents.get(t.members.find((m) => m.role === 'implementer').id), kind: 'team', key: `team:${t.id}`, t }));
+    .filter((t) => ['ready', 'blocked'].includes(t.stage) && agents.has(teamOwner(t)))
+    .map((t) => ({ a: agents.get(teamOwner(t)), kind: 'team', key: `team:${t.id}`, t }));
 }
 function inboxItems() {
   return [...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds()]
@@ -1131,7 +1132,7 @@ function forkAgent(id, checkpoint) {
 // ------------------------------------------------------------------ teams
 
 const TEAM_STEPS = [['analyze', 'Analyze'], ['discuss', 'Discuss'], ['implement', 'Implement'], ['test', 'Test'], ['review', 'Review'], ['ready', 'Your call'], ['done', 'Done']];
-const STAGE_TEXT = { analyze: 'analyzing', discuss: 'discussing the analysis', implement: 'implementing', test: 'testing', review: 'reviewing', ready: 'approved, waiting for you', finalizing: 'opening the PR', done: 'done', blocked: 'waiting for your decision', stopped: 'stopped' };
+const STAGE_TEXT = { analyze: 'analyzing', discuss: 'discussing the analysis', implement: 'implementing', test: 'testing', review: 'reviewing', ready: 'approved, waiting for you', finalizing: 'opening the PR', done: 'done; ready for the next request', blocked: 'waiting for your decision', stopped: 'stopped' };
 const GOOD = new Set(['ready', 'agree', 'done', 'pass', 'approve']);
 const ROLE_NAME = (m) => `${m.role[0].toUpperCase()}${m.role.slice(1)}${m.n && teams.get(openTeamId)?.settings.critics > 1 ? ` ${m.n}` : ''}`;
 
@@ -1139,7 +1140,7 @@ function teamBanner(a) {
   if (!a.team) return '';
   const t = teams.get(a.team.id);
   const turn = t?.waiting?.some((w) => w.member === a.id && !w.verdict);
-  return `<div class="bl-banner team">👥 <b>${esc(a.team.role)}</b> on team <b>${esc(t?.name ?? a.team.id)}</b>${t ? ` · ${esc(STAGE_TEXT[t.stage] ?? t.stage)}${t.loop > 1 ? ` · round ${t.loop}` : ''}` : ''}${turn ? ' · <b>its turn</b>' : ''}
+  return `<div class="bl-banner team">👥 <b>${esc(a.team.role)}</b> on team <b>${esc(t?.name ?? a.team.id)}</b>${t?.mode === 'lead' ? ` · quest ${t.quest ?? 1}` : ''}${t ? ` · ${esc(STAGE_TEXT[t.stage] ?? t.stage)}${t.loop > 1 ? ` · round ${t.loop}` : ''}` : ''}${turn ? ' · <b>its turn</b>' : ''}
     <span class="spacer"></span><button class="small primary" data-team-open="${a.team.id}">Open team</button></div>`;
 }
 
@@ -1175,6 +1176,7 @@ function renderTeam() {
     return;
   }
   if ($('#team-body').contains(document.activeElement) && document.activeElement.tagName === 'TEXTAREA') return;
+  const openQuests = new Set([...$('#team-body').querySelectorAll('details.team-quest[open] summary b')].map((b) => b.textContent));
   $('#team-title').textContent = `Team: ${t.name}`;
   $('#team-stop').hidden = ['done', 'stopped'].includes(t.stage);
   const memberOf = (id) => t.members.find((m) => m.id === id);
@@ -1197,8 +1199,23 @@ function renderTeam() {
               ${t.blocked.at === 'loops' ? '<button class="small" data-team-act="skip" title="Move to your final review without another round">Accept as is</button>' : ''}
             </div></div>`
         : '';
+  const quest = t.mode === 'lead' ? `<p class="hint">Quest ${t.quest ?? 1}${t.quests?.length ? ` · ${t.quests.length} earlier` : ''}</p>` : '';
+  const handoffs = (list) =>
+    `<ul class="team-timeline">${list.slice().reverse().map((h) => {
+      const m = memberOf(h.member);
+      const who = t.mode === 'lead' ? `${h.role[0].toUpperCase()}${h.role.slice(1)}${h.n && t.settings.critics > 1 ? ` ${h.n}` : ''}` : m ? ROLE_NAME(m) : esc(h.role);
+      return `<li><span><b>${who}</b> <span class="hint">${ago(h.at)}${h.loop > 1 && ['implement', 'test', 'review'].includes(h.stage) ? ` · r${h.loop}` : ''}</span></span>
+        <span><span class="verdict-word ${GOOD.has(h.verdict) ? 'good' : 'bad'}">${esc(h.verdict)}</span></span>
+        <span><a href="#" data-team-file="${esc(h.file)}">${esc(h.file.split('/').pop())}</a> <span class="summary">${esc(h.summary)}</span></span></li>`;
+    }).join('')}</ul>`;
+  const asking = t.mode === 'lead' && t.stage !== 'stopped'
+    ? `<form class="team-ask" id="team-ask"><b>New request</b> <span class="hint">The lead runs it through the team as the next quest. You can also just type it in the lead's terminal.</span>
+        <textarea id="team-ask-text" rows="2" placeholder="Now add a --json flag to the output"></textarea>
+        <div class="need-actions"><button class="small${['ready', 'done'].includes(t.stage) ? ' primary' : ''}">Give to the team</button></div></form>`
+    : '';
   $('#team-body').innerHTML = `
-    <p>${esc(t.intent)}</p>
+    ${quest}
+    <p>${esc(t.request ?? t.intent)}</p>
     <div class="team-steps">${teamSteps(t)}</div>
     <p class="hint">${esc(STAGE_TEXT[t.stage] ?? t.stage)}${t.settings.critics ? ` · analysis round ${t.round}` : ''} · build round ${t.loop}${t.newProject ? ` · new project in <code>${esc(t.newProject)}</code>` : ''}${t.branch ? ` · branch <code>${esc(t.branch)}</code>` : ''}${t.outcome === 'merged' ? ' · merged into main' : ''}${t.costUsd ? ` · ${fmtCost(t.costUsd)}` : ''}
       ${t.prs.map((p) => ` · <a href="${esc(p.url)}" target="_blank" rel="noopener">PR #${p.number ?? ''}</a>`).join('')}</p>
@@ -1210,20 +1227,37 @@ function renderTeam() {
         const st = a ? statusOf(a) : m.status;
         return `<tr class="${m.turn ? 'diffing' : ''}"><td><b>${ROLE_NAME(m)}</b>${m.turn ? ' <span class="tag open">its turn</span>' : ''}</td>
           <td>${a ? `<a href="#${m.id}" data-team-goto="${m.id}">${esc(m.name)}</a>` : '<span class="hint">deleted</span>'}</td>
-          <td><span class="pill ${st}">${pillText(st)}</span></td><td>${m.model ? esc(m.model) : '<span class="hint">default</span>'}</td><td>${fmtCost(m.costUsd)}</td></tr>`;
+          <td><span class="pill ${st}">${pillText(st)}</span></td><td>${m.model ? esc(m.model) : '<span class="hint">default</span>'}</td><td>${fmtCost(m.costUsd)}${t.mode === 'lead' ? ' <span class="hint">with sub-agents</span>' : ''}</td></tr>`;
+      }).join('')}
+      ${t.subagents.map((r) => {
+        const last = t.history.findLast((h) => h.role === r.role);
+        return `<tr><td>${r.role[0].toUpperCase()}${r.role.slice(1)}</td><td><span class="hint">sub-agent of the lead</span></td>
+          <td>${last ? `<span class="verdict-word ${GOOD.has(last.verdict) ? 'good' : 'bad'}">${esc(last.verdict)}</span> <span class="hint">${ago(last.at)}</span>` : '<span class="hint">—</span>'}</td>
+          <td>${r.model ? esc(r.model) : '<span class="hint">lead\'s</span>'}</td><td></td></tr>`;
       }).join('')}
     </table></div>
     <h3>Handoffs</h3>
-    ${t.history.length
-      ? `<ul class="team-timeline">${t.history.slice().reverse().map((h) => {
-          const m = memberOf(h.member);
-          return `<li><span><b>${m ? ROLE_NAME(m) : esc(h.role)}</b> <span class="hint">${ago(h.at)}${h.loop > 1 && ['implement', 'test', 'review'].includes(h.stage) ? ` · r${h.loop}` : ''}</span></span>
-            <span><span class="verdict-word ${GOOD.has(h.verdict) ? 'good' : 'bad'}">${esc(h.verdict)}</span></span>
-            <span><a href="#" data-team-file="${esc(h.file)}">${esc(h.file)}</a> <span class="summary">${esc(h.summary)}</span></span></li>`;
-        }).join('')}</ul>`
-      : '<p class="hint">Nothing handed off yet. The analyst is reading the code.</p>'}
-    ${teamFile ? `<div class="need-head"><b>${esc(teamFile.name)}</b><span class="spacer"></span><button class="small ghost" data-team-file-close>Close</button></div><article class="md team-file">${md(teamFile.markdown)}</article>` : ''}`;
+    ${t.history.length ? handoffs(t.history) : '<p class="hint">Nothing handed off yet. The analyst is reading the code.</p>'}
+    ${asking}
+    ${t.quests?.length
+      ? `<h3>Earlier requests</h3>${t.quests.slice().reverse().map((q) => `<details class="team-quest"><summary><b>Quest ${q.n}</b> ${esc(q.request.split('\n')[0].slice(0, 100))} <span class="hint">· ${esc(q.outcome)}</span></summary>${q.history.length ? handoffs(q.history) : '<p class="hint">No handoffs.</p>'}</details>`).join('')}`
+      : ''}
+    ${teamFile ? `<div class="need-head"><b>${esc(teamFile.name.split('/').pop())}</b><span class="spacer"></span><button class="small ghost" data-team-file-close>Close</button></div><article class="md team-file">${md(teamFile.markdown)}</article>` : ''}`;
+  for (const d of $('#team-body').querySelectorAll('details.team-quest')) if (openQuests.has(d.querySelector('summary b').textContent)) d.open = true;
 }
+
+$('#team-body').addEventListener('submit', (e) => {
+  if (e.target.id !== 'team-ask') return;
+  e.preventDefault();
+  const text = $('#team-ask-text').value.trim();
+  if (!text) return;
+  const id = openTeamId;
+  act(async () => {
+    teams.set(id, await api('POST', `/teams/${id}/ask`, { text }));
+    $('#team-ask-text').value = '';
+    renderTeam();
+  }, 'Given to the lead');
+});
 
 $('#team-close').onclick = () => {
   openTeamId = null;
@@ -2948,6 +2982,7 @@ $('#new-form').addEventListener('submit', async (e) => {
       const team = await api('POST', '/teams', {
         intent: intents.join('\n'),
         critics: Number(f.get('critics')),
+        mode: f.get('teamMode') || undefined,
         testCommand: f.get('teamTest') || undefined,
         models,
         repo: f.get('repo') || undefined,
@@ -2964,7 +2999,7 @@ $('#new-form').addEventListener('submit', async (e) => {
       e.target.reset();
       syncWhen();
       openTeam(team.id);
-      toast(`Team started: ${team.members.length} agents`);
+      toast(team.mode === 'lead' ? 'Team started: one lead session with sub-agents' : `Team started: ${team.members.length} agents`);
     } catch (err) {
       $('#new-error').textContent = err.message;
       $('#new-error').hidden = false;

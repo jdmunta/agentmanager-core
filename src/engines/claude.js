@@ -11,26 +11,28 @@ export default {
   id: 'claude',
   label: 'Claude Code',
   // What the UI may offer for this engine's agents.
-  supports: { chooseSessionId: true, cost: true, planHandoff: true, fork: true, oneShot: true },
+  supports: { chooseSessionId: true, cost: true, planHandoff: true, fork: true, oneShot: true, subagents: true },
   permissionModes: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
 
   bin: (config) => config.engines?.claude?.bin ?? config.claudeBin ?? 'claude',
   extraArgs: (config) => [...(config.engines?.claude?.args ?? config.claudeArgs ?? [])],
 
   /** Options for every launch: permissions, model, a folder it may write to, extra instructions. */
-  optionArgs({ permissionMode, model, writableDir, instructions }) {
+  optionArgs({ permissionMode, model, writableDir, instructions, agents }) {
     const args = [];
     if (permissionMode && permissionMode !== 'default') args.push('--permission-mode', permissionMode);
     if (model) args.push('--model', model);
     const dirs = [writableDir ?? []].flat();
     if (dirs.length) args.push('--add-dir', ...dirs, '--allowedTools', ...dirs.flatMap((d) => [`Write(/${d}/**)`, `Edit(/${d}/**)`]));
     if (instructions) args.push('--append-system-prompt', instructions);
+    // Sub-agents for this session only (a team lead's roles).
+    if (agents) args.push('--agents', JSON.stringify(agents));
     return args;
   },
 
   /** Full arguments for a launch: options, then the session. */
-  launchArgs({ extra = [], permissionMode, model, writableDir, instructions, sessionId, resume, name, prompt }) {
-    return [...extra, ...this.optionArgs({ permissionMode, model, writableDir, instructions }), ...this.sessionArgs({ sessionId, resume, name, prompt })];
+  launchArgs({ extra = [], permissionMode, model, writableDir, instructions, agents, sessionId, resume, name, prompt }) {
+    return [...extra, ...this.optionArgs({ permissionMode, model, writableDir, instructions, agents }), ...this.sessionArgs({ sessionId, resume, name, prompt })];
   },
 
   /** A new session under the ID we chose, or a resumed one; prompt is the first (or next) message. */

@@ -11,7 +11,7 @@ import { passEnv, plist, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
-import { VERDICTS, readVerdict, summarize, teamPrompt } from '../src/teams.js';
+import { VERDICTS, leadPrompt, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-unit-'));
 
@@ -675,4 +675,21 @@ test('claude: several writable folders, each with write and edit allowed', () =>
   const args = claude.optionArgs({ writableDir: ['/b', '/t'] });
   assert.deepEqual(args, ['--add-dir', '/b', '/t', '--allowedTools', 'Write(//b/**)', 'Edit(//b/**)', 'Write(//t/**)', 'Edit(//t/**)']);
   assert.deepEqual(claude.optionArgs({ writableDir: '/b' }), ['--add-dir', '/b', '--allowedTools', 'Write(//b/**)', 'Edit(//b/**)']);
+});
+
+test('team lead: sub-agents per role, and the steps it runs', () => {
+  const team = { settings: { critics: 0, maxRounds: 3, maxLoops: 2, testCommand: null, models: { analyst: 'opus' } } };
+  const subs = subagents(team, '/t/x');
+  assert.deepEqual(Object.keys(subs), ['analyst', 'implementer', 'tester', 'reviewer'], 'no critic on a team without critics');
+  assert.equal(subs.analyst.model, 'opus');
+  assert.equal(subs.tester.model, undefined, "the lead's model");
+  assert.match(subs.reviewer.description, /reviewer/);
+  const p = leadPrompt(team, '/t/x', 'main @ abc123def');
+  assert.match(p, /no critics on this team/);
+  assert.match(p, /At most 2 implementation rounds/);
+  assert.match(p, /git diff abc123def\.\.\.HEAD/);
+  assert.match(p, /Never write an analysis/);
+  assert.match(p, /quest-1/);
+  assert.match(p, /A question about the team's work isn't a quest/);
+  assert.deepEqual(claude.optionArgs({ agents: { a: { description: 'd', prompt: 'p' } } }), ['--agents', '{"a":{"description":"d","prompt":"p"}}']);
 });

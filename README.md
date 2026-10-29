@@ -172,8 +172,8 @@ agentmgr answer <agent> <question-id> "…"     # answer a question from the inb
 agentmgr tell <agent> "…"                     # send a message into the session (when it's idle)
 agentmgr fork <agent> [-c 3] [-m "…"]         # new agent from now (or checkpoint 3), its own worktree
 agentmgr checkpoints <agent>                  # snapshots saved at the end of each turn
-agentmgr team start "problem" [-r <repo> | -d <folder>] [-c 2] [-t "npm test"] [--role-model reviewer=opus]
-agentmgr team show [team] | finalize <team> [--merge | --publish | --keep] | send-back <team> "…" | continue <team> ["note"] | skip <team> | stop <team>
+agentmgr team start "problem" [-r <repo> | -d <folder>] [-c 2] [--separate] [-t "npm test"] [--role-model reviewer=opus]
+agentmgr team show [team] | ask <team> "…" | finalize <team> [--merge | --publish | --keep] | send-back <team> "…" | continue <team> ["note"] | skip <team> | stop <team>
 agentmgr race start "intent" -v opus -v "sonnet|keep it small" -r <repo> -t "npm test"
 agentmgr race show [race] | test <race> | pick <race> <agent> [--cleanup]
 agentmgr flush                                # save session IDs, scrollback, usage and state now
@@ -542,7 +542,7 @@ The source agent keeps running untouched.
 
 ## Teams
 
-**+ New agents → Team** (or `agentmgr team start`) gives one problem to a team of agents, each a normal agent with its own terminal:
+**+ New agents → Team** (or `agentmgr team start`) gives one problem to a team. By default the team is **one lead session**: one agent in your list, with one terminal, whose sub-agents (Claude Code's `--agents`) play the roles. The lead runs the steps and delegates each one to the right sub-agent. **Separate agents** (`--separate`) gives each role an agent of its own instead, with its own terminal, model and engine (for example a reviewer on Codex), and AI Agent Manager hands the work from one to the next.
 
 ```
  Analyze ──► Discuss ──► Implement ──► Test ──► Review ──► you: PR, keep, or send back
@@ -557,9 +557,11 @@ The source agent keeps running untouched.
 - **Tester** runs the tests and tries the change; it may add tests, but failures go back to the implementer.
 - **Reviewer** reviews the diff against the analysis and the test report, and approves it or sends it back.
 
-The agents hand off through Markdown files in the team's folder (`~/.agentmanager/teams/<id>/`: `analysis-1.md`, `critique-1-1.md`, `test-1.md`, `review-1.md`, …), each ending with a `verdict:` line. AI Agent Manager reads the verdict and tells the next agent what to read, so no agent waits on another, and you can read every handoff in the team view. Only one agent works at a time, and all of them share one worktree and branch.
+Either way, the roles hand off through Markdown files in the team's folder (`~/.agentmanager/teams/<id>/`: `analysis-1.md`, `critique-1-1.md`, `test-1.md`, `review-1.md`, …), each ending with a `verdict:` line. AI Agent Manager reads each verdict to show where the team stands, and you can read every handoff in the team view. With separate agents it also tells the next agent what to read. The team works in one worktree and branch.
 
 **You step in only at the end:** when the reviewer approves, the team shows up in your inbox. **Open a pull request** (the implementer pushes and opens it), **Keep the branch**, or **Send back** with what to change (it goes through test and review again).
+
+**The lead stays.** When a quest ends, the lead keeps its session. Ask it for more work in its terminal (or in the team view's **New request**, or `agentmgr team ask <team> "…"`), and it runs that request through the team as the next quest, on the same branch, with its own folder (`quest-2/`, …) and its own stop for you at the end. A question about the work just gets an answer. Earlier quests and their handoffs stay in the team view.
 
 **A new project, with no repository yet:** leave the repository and folder empty (or give a folder that doesn't exist yet). The team creates the folder (under `~/.agentmanager/projects/` by default; `teams.newProjectsDir` in config.json), starts a git repository with an empty first commit on `main`, and works on its own branch. At the end you choose **Merge into main** (a fast-forward of the local `main`), **Publish to GitHub** (the implementer creates a private repository with `gh`, pushes, and opens a pull request), or **Keep the branch**. If the analyst and the critics don't agree within 3 rounds, or the tester and reviewer still send the work back after 3, the team stops and asks you: one more round (with a note), or move on.
 
@@ -774,7 +776,7 @@ State lives in `~/.agentmanager/` (`state.json`, `daemon.log`, `repos/` for shar
   "inbox": true,
   "maxCheckpoints": 40,
   "raceTestTimeoutSec": 900,
-  "teams": { "critics": 1, "maxRounds": 3, "maxLoops": 3, "newProjectsDir": "~/projects", "models": { "analyst": "opus", "reviewer": "opus" } },
+  "teams": { "mode": "lead", "critics": 1, "maxRounds": 3, "maxLoops": 3, "newProjectsDir": "~/projects", "models": { "analyst": "opus", "reviewer": "opus" } },
   "conflictRefreshSec": 60,
   "stuck": { "repeatFailures": 3, "thrashReverts": 2, "thrashEdits": 10, "driftMinutes": 20, "driftActions": 25 },
   "judge": { "enabled": true, "model": "haiku", "dailyCalls": 300 },
