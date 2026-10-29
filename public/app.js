@@ -1181,7 +1181,11 @@ function renderTeam() {
   const gate =
     t.stage === 'ready'
       ? `<div class="team-gate"><b>✓ The reviewer approved it.</b> Look at the review and the changes, then:
-          <div class="need-actions"><button class="small primary" data-team-act="pr">Open a pull request</button><button class="small" data-team-act="keep">Keep the branch, no PR</button></div>
+          <div class="need-actions">${t.remote
+            ? '<button class="small primary" data-team-act="pr">Open a pull request</button>'
+            : `<button class="small primary" data-team-act="merge" title="Fast-forward ${esc(t.folder ?? '')} to the team's branch">Merge into main</button>
+               <button class="small" data-team-act="publish" title="The implementer creates a private GitHub repository, pushes and opens a pull request">Publish to GitHub</button>`}
+            <button class="small" data-team-act="keep">Keep the branch${t.remote ? ', no PR' : ''}</button></div>
           <textarea id="team-note" rows="2" placeholder="Or say what should change; the implementer fixes it and it goes through test and review again"></textarea>
           <div class="need-actions"><button class="small" data-team-act="send-back">Send back</button></div></div>`
       : t.stage === 'blocked'
@@ -1196,7 +1200,7 @@ function renderTeam() {
   $('#team-body').innerHTML = `
     <p>${esc(t.intent)}</p>
     <div class="team-steps">${teamSteps(t)}</div>
-    <p class="hint">${esc(STAGE_TEXT[t.stage] ?? t.stage)}${t.settings.critics ? ` · analysis round ${t.round}` : ''} · build round ${t.loop}${t.branch ? ` · branch <code>${esc(t.branch)}</code>` : ''}${t.costUsd ? ` · ${fmtCost(t.costUsd)}` : ''}
+    <p class="hint">${esc(STAGE_TEXT[t.stage] ?? t.stage)}${t.settings.critics ? ` · analysis round ${t.round}` : ''} · build round ${t.loop}${t.newProject ? ` · new project in <code>${esc(t.newProject)}</code>` : ''}${t.branch ? ` · branch <code>${esc(t.branch)}</code>` : ''}${t.outcome === 'merged' ? ' · merged into main' : ''}${t.costUsd ? ` · ${fmtCost(t.costUsd)}` : ''}
       ${t.prs.map((p) => ` · <a href="${esc(p.url)}" target="_blank" rel="noopener">PR #${p.number ?? ''}</a>`).join('')}</p>
     ${gate}
     <div class="race-table-wrap"><table class="race-table">
@@ -1268,13 +1272,15 @@ $('#team-body').addEventListener('click', (e) => {
   const note = $('#team-note')?.value.trim() || undefined;
   const id = openTeamId;
   const calls = {
-    pr: () => api('POST', `/teams/${id}/finalize`, { pr: true }),
-    keep: () => api('POST', `/teams/${id}/finalize`, { pr: false }),
+    pr: () => api('POST', `/teams/${id}/finalize`, { mode: 'pr' }),
+    publish: () => api('POST', `/teams/${id}/finalize`, { mode: 'publish' }),
+    merge: () => api('POST', `/teams/${id}/finalize`, { mode: 'merge' }),
+    keep: () => api('POST', `/teams/${id}/finalize`, { mode: 'keep' }),
     'send-back': () => api('POST', `/teams/${id}/send-back`, { note }),
     continue: () => api('POST', `/teams/${id}/resume`, { action: 'continue', note }),
     skip: () => api('POST', `/teams/${id}/resume`, { action: 'skip', note }),
   };
-  const done = { pr: 'The implementer is opening the PR', keep: 'Done; the branch is kept', 'send-back': 'Sent back to the implementer', continue: 'Another round started', skip: 'Moving on' };
+  const done = { pr: 'The implementer is opening the PR', publish: 'The implementer is publishing it to GitHub', merge: 'Merged into main', keep: 'Done; the branch is kept', 'send-back': 'Sent back to the implementer', continue: 'Another round started', skip: 'Moving on' };
   act(async () => {
     teams.set(id, await calls[b.dataset.teamAct]());
     renderTeam();

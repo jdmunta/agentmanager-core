@@ -1689,7 +1689,7 @@ test('races: variants, scoreboard, tests in each worktree, diff, pick a winner a
 
 test('teams: analyst and critic align, implementer, tester and reviewer loop, you finalize at the end', async () => {
   const origin = makeOrigin('team');
-  assert.equal((await call('POST', '/teams', { intent: 'Fix it' })).status, 400, 'needs a repo');
+  assert.equal((await call('POST', '/teams', { intent: ' ', repo: `file://${origin}` })).status, 400, 'needs a problem');
   assert.equal((await call('POST', '/teams', { intent: 'Fix it', repo: `file://${origin}`, critics: 3 })).status, 400);
   const team = (await call('POST', '/teams', { intent: 'Make login survive token rotation', repo: `file://${origin}`, critics: 1, maxRounds: 2, maxLoops: 1, testCommand: 'npm test', models: { reviewer: 'opus' } })).body;
   assert.deepEqual(team.members.map((m) => m.role), ['analyst', 'critic', 'implementer', 'tester', 'reviewer']);
@@ -1792,6 +1792,47 @@ test('teams: analyst and critic align, implementer, tester and reviewer loop, yo
   assert.equal((await call('GET', `/agents/${id('implementer')}`)).status, 404);
   assert.ok(!fs.existsSync(owner.workdir), 'worktree removed');
   assert.ok(!fs.existsSync(team.dir), 'team folder removed');
+});
+
+test('teams: a new project without a repository gets a git repo, and the work merges into its main', async () => {
+  const messy = path.join(home, 'not-a-repo');
+  fs.mkdirSync(messy, { recursive: true });
+  fs.writeFileSync(path.join(messy, 'notes.txt'), 'x');
+  assert.equal((await call('POST', '/teams', { intent: 'Build it', dir: messy })).status, 400, "a folder with files that isn't a repo");
+
+  const team = (await call('POST', '/teams', { intent: 'Build a tiny CLI that prints the date', critics: 0 })).body;
+  assert.equal(team.newProject, path.join(home, 'projects', 'build-a-tiny-cli-that-prints-the-date'));
+  assert.equal(execFileSync('git', ['log', '--format=%s', 'main'], { cwd: team.newProject }).toString().trim(), 'Start the project');
+  const owner = await runningAgent(team.members.find((m) => m.role === 'analyst').id).then(() => agentNow(team.members.find((m) => m.role === 'implementer').id));
+  assert.ok(owner.worktree && owner.branch.startsWith('agent/'), 'the team works on its own branch');
+  assert.equal(owner.sourceDir, fs.realpathSync(team.newProject));
+  const again = (await call('POST', '/teams', { intent: 'Build a tiny CLI that prints the date', critics: 0 })).body;
+  assert.equal(again.newProject, `${team.newProject}-2`, 'a new folder, not the same one');
+  await call('DELETE', `/teams/${again.id}?agents=1`);
+
+  const teamNow = async () => (await call('GET', `/teams/${team.id}`)).body;
+  const stage = (want) => waitFor(async () => ((await teamNow()).stage === want ? teamNow() : null), 20000, `team ${want}`);
+  const hand = (file, text) => {
+    const f = path.join(team.dir, file);
+    fs.writeFileSync(f, text);
+    const past = new Date(Date.now() - 5000);
+    fs.utimesSync(f, past, past);
+  };
+  hand('analysis-1.md', 'Print the date.\nverdict: ready\n');
+  await stage('implement');
+  fs.writeFileSync(path.join(owner.workdir, 'date.sh'), 'date\n');
+  execFileSync('git', ['add', '.'], { cwd: owner.workdir });
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'Add date.sh'], { cwd: owner.workdir });
+  hand('implementation-1.md', 'Added date.sh\nverdict: done\n');
+  hand('test-1.md', 'Prints the date.\nverdict: pass\n');
+  hand('review-1.md', 'Good.\nverdict: approve\n');
+  const ready = await stage('ready');
+  assert.equal(ready.remote, false);
+  assert.equal((await call('POST', `/teams/${team.id}/finalize`, { mode: 'pr' })).status, 409, 'no remote for a pull request');
+  const merged = (await call('POST', `/teams/${team.id}/finalize`, { mode: 'merge' })).body;
+  assert.equal(merged.outcome, 'merged');
+  assert.equal(fs.readFileSync(path.join(team.newProject, 'date.sh'), 'utf8'), 'date\n', "main has the team's work");
+  await call('DELETE', `/teams/${team.id}?agents=1`);
 });
 
 test('hub: invite, join, fleet view, signed reconnects, forged runners refused, remove, leave', async () => {

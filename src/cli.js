@@ -632,7 +632,7 @@ export async function main(argv) {
     .description('Start a team on a problem')
     .argument('<problem>')
     .option('-r, --repo <url>', 'git repository URL')
-    .option('-d, --dir <path>', 'git folder (the team gets a worktree)')
+    .option('-d, --dir <path>', 'git folder (the team gets a worktree), or a new folder for a new project')
     .option('--project <name>', 'project shortcut or name')
     .option('-b, --base <ref>', 'branch the team starts from')
     .option('-c, --critics <n>', 'critics who challenge the analysis (0-2)', '1')
@@ -649,6 +649,7 @@ export async function main(argv) {
         testCommand: opts.test, model: opts.model, models, maxRounds: opts.maxRounds, maxLoops: opts.maxLoops,
       });
       console.log(`${green('👥')} team ${bold(t.id)}: ${t.members.map((m) => `${m.role} (${m.id})`).join(', ')}`);
+      if (t.newProject) console.log(dim(`  new project: ${t.newProject}`));
       console.log(dim(`  follow it: agentmgr team show ${t.id}`));
     });
   teamCmd
@@ -671,18 +672,22 @@ export async function main(argv) {
         console.log('');
         table(t.history.map((h) => [h.role, h.verdict, h.file, h.summary.slice(0, 70)]), ['FROM', 'VERDICT', 'FILE', 'SUMMARY']);
       }
-      if (t.stage === 'ready') console.log(`\n${green('✓')} approved: agentmgr team finalize ${t.id} [--no-pr], or agentmgr team send-back ${t.id} "<what to change>"`);
+      if (t.stage === 'ready') console.log(`\n${green('✓')} approved: agentmgr team finalize ${t.id} ${t.remote ? '[--keep]' : '--merge | --publish | --keep'}, or agentmgr team send-back ${t.id} "<what to change>"`);
       if (t.stage === 'blocked') console.log(`\n${yellow('!')} decide: agentmgr team continue ${t.id} ["note"], or agentmgr team skip ${t.id}`);
     });
   teamCmd
     .command('finalize')
-    .description('Accept the approved work: the implementer opens a PR (or keep the branch with --no-pr)')
+    .description('Accept the approved work: the implementer opens a PR, or --merge / --publish / --keep')
     .argument('<team>')
-    .option('--no-pr', 'keep the branch without a pull request')
+    .option('--merge', 'fast-forward the local main branch to the team branch')
+    .option('--publish', 'no GitHub repository yet: create a private one, push and open a PR')
+    .option('--keep', 'keep the branch as it is')
+    .option('--no-pr', 'same as --keep')
     .action(async (id, opts) => {
       await daemon();
-      const t = await api('POST', `/teams/${id}/finalize`, { pr: opts.pr });
-      console.log(`${green('✓')} ${t.stage === 'finalizing' ? 'the implementer is opening the pull request' : 'done; the branch is kept'}`);
+      const mode = opts.merge ? 'merge' : opts.publish ? 'publish' : opts.keep || opts.pr === false ? 'keep' : 'pr';
+      const t = await api('POST', `/teams/${id}/finalize`, { mode });
+      console.log(`${green('✓')} ${{ merged: 'merged into main', kept: 'done; the branch is kept' }[t.outcome] ?? (mode === 'publish' ? 'the implementer is publishing it to GitHub' : 'the implementer is opening the pull request')}`);
     });
   teamCmd
     .command('send-back')
