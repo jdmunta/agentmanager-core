@@ -11,7 +11,7 @@ import { passEnv, plist, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
-import { VERDICTS, leadPrompt, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
+import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-unit-'));
 
@@ -662,6 +662,19 @@ test('team handoffs: the verdict line, in the forms models write it', () => {
   assert.equal(readVerdict('verdict: done', VERDICTS.test), null, "another kind's word");
 });
 
+test('team reviews: coverage and the gaps section', () => {
+  assert.equal(readCoverage('## Gaps\nNone\n\ncoverage: complete\nverdict: approve'), 'complete');
+  assert.equal(readCoverage('**Coverage:** `Partial`'), 'partial');
+  assert.equal(readCoverage('coverage: incomplete'), 'partial');
+  assert.equal(readCoverage('Test coverage is good'), null);
+  assert.equal(readCoverage('coverage: maybe'), null);
+  const review = '# Review\nGood.\n\n## Gaps\n- Payroll\n- Reports\n\n### Detail\nmore\n\n## What is good\nTests.\n\ncoverage: partial\nverdict: approve\n';
+  assert.equal(gapsOf(review), '- Payroll\n- Reports\n\n### Detail\nmore');
+  assert.equal(gapsOf('## Gaps\n- Payroll\ncoverage: partial\nverdict: approve'), '- Payroll');
+  assert.equal(gapsOf('No section'), '');
+  assert.match(subagents({ settings: { critics: 0 } }, '/t').reviewer.prompt, /## Gaps[\s\S]*coverage: complete[\s\S]*Missing parts alone are no reason/);
+});
+
 test('team handoffs: a summary line and role instructions', () => {
   assert.equal(summarize('# Analysis\n\n## Problem\nTokens are dropped.\n- on rotation\n\nverdict: ready'), 'Tokens are dropped. - on rotation');
   assert.ok(summarize('x '.repeat(400)).length <= 240);
@@ -693,5 +706,9 @@ test('team lead: sub-agents per role, and the steps it runs', () => {
   assert.match(p, /Stop only when the reviewer approves/);
   assert.match(p, /quest-1/);
   assert.match(p, /A question about the team's work isn't a quest/);
+  assert.match(p, /# Gap round <k>[\s\S]*Ask the person before each gap round/);
+  const gp = leadPrompt({ settings: { ...team.settings, gapRounds: 2 } }, '/t/x', null);
+  assert.match(gp, /fewer than 2 gap rounds have run for this request, start the next one yourself, without asking/);
+  assert.doesNotMatch(gp, /Ask the person before each gap round/);
   assert.deepEqual(claude.optionArgs({ agents: { a: { description: 'd', prompt: 'p' } } }), ['--agents', '{"a":{"description":"d","prompt":"p"}}']);
 });

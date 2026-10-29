@@ -919,9 +919,9 @@ function needCard(it, { inDetail = false } = {}) {
       </div>`;
   } else if (it.kind === 'team') {
     const t = it.t;
-    body = `<p class="need-title">${t.stage === 'ready' ? `✓ The reviewer approved <b>${esc(t.name)}</b>` : `<b>${esc(t.name)}</b> needs a decision: ${esc(t.blocked?.reason ?? '')}`}</p>
+    body = `<p class="need-title">${t.stage === 'ready' ? `✓ The reviewer approved <b>${esc(t.name)}</b>${t.gaps ? ', with parts still missing: run a gap round?' : ''}` : `<b>${esc(t.name)}</b> needs a decision: ${esc(t.blocked?.reason ?? '')}`}</p>
       <p class="hint">${esc(t.intent.split('\n')[0].slice(0, 140))}</p>
-      <div class="need-actions"><button class="small primary" data-ib="team-open" data-team="${t.id}">${t.stage === 'ready' ? 'Review and finalize' : 'Decide'}</button></div>`;
+      <div class="need-actions"><button class="small primary" data-ib="team-open" data-team="${t.id}">${t.stage !== 'ready' ? 'Decide' : t.gaps ? 'See the gaps' : 'Review and finalize'}</button></div>`;
   } else if (it.kind === 'plan') {
     const title = a.planReview.markdown?.match(/^#\s+(.+)$/m)?.[1] ?? 'Implementation plan';
     body = `<p class="need-title">${esc(title)}</p>
@@ -1132,7 +1132,7 @@ function forkAgent(id, checkpoint) {
 // ------------------------------------------------------------------ teams
 
 const TEAM_STEPS = [['analyze', 'Analyze'], ['discuss', 'Discuss'], ['implement', 'Implement'], ['test', 'Test'], ['review', 'Review'], ['ready', 'Your call'], ['done', 'Done']];
-const STAGE_TEXT = { analyze: 'analyzing', discuss: 'discussing the analysis', implement: 'implementing', test: 'testing', review: 'reviewing', ready: 'approved, waiting for you', finalizing: 'opening the PR', done: 'done; ready for the next request', blocked: 'waiting for your decision', stopped: 'stopped' };
+const STAGE_TEXT = { analyze: 'analyzing', discuss: 'discussing the analysis', implement: 'implementing', test: 'testing', review: 'reviewing', ready: 'approved, waiting for you', gaps: 'starting a round for the gaps', finalizing: 'opening the PR', done: 'done; ready for the next request', blocked: 'waiting for your decision', stopped: 'stopped' };
 const GOOD = new Set(['ready', 'agree', 'done', 'pass', 'approve']);
 const ROLE_NAME = (m) => `${m.role[0].toUpperCase()}${m.role.slice(1)}${m.n && teams.get(openTeamId)?.settings.critics > 1 ? ` ${m.n}` : ''}`;
 
@@ -1153,7 +1153,7 @@ function openTeam(id) {
 }
 
 function teamSteps(t) {
-  const at = t.stage === 'finalizing' ? 'ready' : t.stage;
+  const at = ['finalizing', 'gaps'].includes(t.stage) ? 'ready' : t.stage;
   const idx = TEAM_STEPS.findIndex(([k]) => k === at);
   const stopped = ['blocked', 'stopped'].includes(t.stage);
   // Where a blocked or stopped team got to: the last step anyone finished.
@@ -1182,13 +1182,18 @@ function renderTeam() {
   const memberOf = (id) => t.members.find((m) => m.id === id);
   const gate =
     t.stage === 'ready'
-      ? `<div class="team-gate"><b>✓ The reviewer approved it.</b> Look at the review and the changes, then:
+      ? `<div class="team-gate">${t.gaps
+          ? `<b>✓ The reviewer approved the work so far, but parts of the request aren't built yet:</b>
+             ${t.gapList ? `<article class="md team-gaps">${md(t.gapList)}</article>` : ''}
+             <div class="need-actions"><button class="small primary" data-team-act="fix-gaps" title="Another round, from analysis to review, for what is missing (and your note below)">Run a gap round</button></div>
+             <p class="hint">Or take the work as it is:</p>`
+          : '<b>✓ The reviewer approved it.</b> Look at the review and the changes, then:'}
           <div class="need-actions">${t.remote
-            ? '<button class="small primary" data-team-act="pr">Open a pull request</button>'
-            : `<button class="small primary" data-team-act="merge" title="Fast-forward ${esc(t.folder ?? '')} to the team's branch">Merge into main</button>
+            ? `<button class="small${t.gaps ? '' : ' primary'}" data-team-act="pr">Open a pull request</button>`
+            : `<button class="small${t.gaps ? '' : ' primary'}" data-team-act="merge" title="Fast-forward ${esc(t.folder ?? '')} to the team's branch">Merge into main</button>
                <button class="small" data-team-act="publish" title="The implementer creates a private GitHub repository, pushes and opens a pull request">Publish to GitHub</button>`}
             <button class="small" data-team-act="keep">Keep the branch${t.remote ? ', no PR' : ''}</button></div>
-          <textarea id="team-note" rows="2" placeholder="Or say what should change; the implementer fixes it and it goes through test and review again"></textarea>
+          <textarea id="team-note" rows="2" placeholder="${t.gaps ? 'A note for the gap round, or' : 'Or say'} what should change; the implementer fixes it and it goes through test and review again"></textarea>
           <div class="need-actions"><button class="small" data-team-act="send-back">Send back</button></div></div>`
       : t.stage === 'blocked'
         ? `<div class="team-gate blocked"><b>${esc(t.blocked.reason)}</b>
@@ -1198,8 +1203,13 @@ function renderTeam() {
               ${t.blocked.at === 'discuss' ? '<button class="small" data-team-act="skip" title="Implement the latest analysis as it is">Implement the latest analysis</button>' : ''}
               ${t.blocked.at === 'loops' ? '<button class="small" data-team-act="skip" title="Move to your final review without another round">Accept as is</button>' : ''}
             </div></div>`
-        : '';
-  const quest = t.mode === 'lead' ? `<p class="hint">Quest ${t.quest ?? 1}${t.quests?.length ? ` · ${t.quests.length} earlier` : ''}</p>` : '';
+        : t.stage === 'done' && t.gaps
+          ? `<div class="team-gate"><b>The last review lists parts of the request that aren't built yet:</b>
+              ${t.gapList ? `<article class="md team-gaps">${md(t.gapList)}</article>` : ''}
+              <textarea id="team-note" rows="2" placeholder="Optional note for the gap round"></textarea>
+              <div class="need-actions"><button class="small primary" data-team-act="fix-gaps">Run a gap round</button></div></div>`
+          : '';
+  const quest = t.mode === 'lead' || t.quest > 1 ? `<p class="hint">Quest ${t.quest ?? 1}${t.gapRound ? ` · gap round ${t.gapRound}` : ''}${t.quests?.length ? ` · ${t.quests.length} earlier` : ''}</p>` : '';
   const handoffs = (list) =>
     `<ul class="team-timeline">${list.slice().reverse().map((h) => {
       const m = memberOf(h.member);
@@ -1311,10 +1321,11 @@ $('#team-body').addEventListener('click', (e) => {
     merge: () => api('POST', `/teams/${id}/finalize`, { mode: 'merge' }),
     keep: () => api('POST', `/teams/${id}/finalize`, { mode: 'keep' }),
     'send-back': () => api('POST', `/teams/${id}/send-back`, { note }),
+    'fix-gaps': () => api('POST', `/teams/${id}/fix-gaps`, { note }),
     continue: () => api('POST', `/teams/${id}/resume`, { action: 'continue', note }),
     skip: () => api('POST', `/teams/${id}/resume`, { action: 'skip', note }),
   };
-  const done = { pr: 'The implementer is opening the PR', publish: 'The implementer is publishing it to GitHub', merge: 'Merged into main', keep: 'Done; the branch is kept', 'send-back': 'Sent back to the implementer', continue: 'Another round started', skip: 'Moving on' };
+  const done = { pr: 'The implementer is opening the PR', publish: 'The implementer is publishing it to GitHub', merge: 'Merged into main', keep: 'Done; the branch is kept', 'send-back': 'Sent back to the implementer', 'fix-gaps': 'A gap round started', continue: 'Another round started', skip: 'Moving on' };
   act(async () => {
     teams.set(id, await calls[b.dataset.teamAct]());
     renderTeam();
@@ -2984,6 +2995,8 @@ $('#new-form').addEventListener('submit', async (e) => {
         critics: Number(f.get('critics')),
         mode: f.get('teamMode') || undefined,
         testCommand: f.get('teamTest') || undefined,
+        // Empty: the defaults (3 rounds each; gap rounds 0, so it asks first).
+        ...Object.fromEntries(['maxRounds', 'maxLoops', 'gapRounds'].filter((k) => String(f.get(k) ?? '') !== '').map((k) => [k, Number(f.get(k))])),
         models,
         repo: f.get('repo') || undefined,
         dir: f.get('dir') || undefined,

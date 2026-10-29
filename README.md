@@ -555,7 +555,9 @@ The source agent keeps running untouched.
 - **Critics** (0–2, default 1) challenge the analysis, marking points *must*, *should* or *question*. The analyst answers every point, changing the analysis or saying why not, until the critics agree.
 - **Implementer** builds the agreed analysis and commits on the team's branch.
 - **Tester** runs the tests and tries the change; it may add tests, but failures go back to the implementer.
-- **Reviewer** reviews the diff against the analysis and the test report, and approves it or sends it back.
+- **Reviewer** reviews the diff against the analysis and the test report, and approves it or sends it back. It also checks coverage: what the request asks for that isn't built yet goes in its review's **Gaps** section, with a `coverage: complete` or `coverage: partial` line.
+
+**Gap rounds.** A big request rarely gets built in one pass. When the reviewer approves good work but lists gaps, the team stops and shows you the gaps. **Run a gap round** (`agentmgr team fix-gaps <team> ["note"]`) starts the next quest (`quest-2/`, …), from a new analysis, for just what is missing, on the same branch; or take the work as it is. You can run a gap round after merging too. Each round shows up under **Earlier requests**. To let the team run some gap rounds without asking, set **Gap rounds without asking** in the form (`--gap-rounds 2`); it asks you once those are used up.
 
 Either way, the roles hand off through Markdown files in the team's folder (`~/.agentmanager/teams/<id>/`: `analysis-1.md`, `critique-1-1.md`, `test-1.md`, `review-1.md`, …), each ending with a `verdict:` line. AI Agent Manager reads each verdict to show where the team stands, and you can read every handoff in the team view. With separate agents it also tells the next agent what to read. The team works in one worktree and branch.
 
@@ -565,7 +567,7 @@ Either way, the roles hand off through Markdown files in the team's folder (`~/.
 
 **A new project, with no repository yet:** leave the repository and folder empty (or give a folder that doesn't exist yet). The team creates the folder (under `~/.agentmanager/projects/` by default; `teams.newProjectsDir` in config.json), starts a git repository with an empty first commit on `main`, and works on its own branch. At the end you choose **Merge into main** (a fast-forward of the local `main`), **Publish to GitHub** (the implementer creates a private repository with `gh`, pushes, and opens a pull request), or **Keep the branch**. If the analyst and the critics don't agree within 3 rounds, or the tester and reviewer still send the work back after 3, the team stops and asks you: one more round (with a note), or move on.
 
-**Cost:** a team is up to six sessions on one problem, so expect several times the tokens of a single agent. Pick the model per role, for example a stronger model for the analyst and the reviewer: `analyst=opus reviewer=opus` in the form, or `--role-model` on the command line. Defaults go in config.json under `teams`: `critics`, `maxRounds`, `maxLoops`, `models`, `engines` (a critic or reviewer on another engine sees different things).
+**Cost:** a team is up to six sessions on one problem, so expect several times the tokens of a single agent. Pick the model per role, for example a stronger model for the analyst and the reviewer: `analyst=opus reviewer=opus` in the form, or `--role-model` on the command line. Defaults go in config.json under `teams`: `critics`, `maxRounds`, `maxLoops`, `gapRounds`, `models`, `engines` (a critic or reviewer on another engine sees different things).
 
 ## Races
 
@@ -776,7 +778,7 @@ State lives in `~/.agentmanager/` (`state.json`, `daemon.log`, `repos/` for shar
   "inbox": true,
   "maxCheckpoints": 40,
   "raceTestTimeoutSec": 900,
-  "teams": { "mode": "lead", "critics": 1, "maxRounds": 3, "maxLoops": 3, "newProjectsDir": "~/projects", "models": { "analyst": "opus", "reviewer": "opus" } },
+  "teams": { "mode": "lead", "critics": 1, "maxRounds": 3, "maxLoops": 3, "gapRounds": 0, "newProjectsDir": "~/projects", "models": { "analyst": "opus", "reviewer": "opus" } },
   "conflictRefreshSec": 60,
   "stuck": { "repeatFailures": 3, "thrashReverts": 2, "thrashEdits": 10, "driftMinutes": 20, "driftActions": 25 },
   "judge": { "enabled": true, "model": "haiku", "dailyCalls": 300 },

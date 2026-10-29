@@ -407,6 +407,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/teams/:id/files/:name', wrap((req) => teams.file(req.params.id, req.params.name)));
   api.post('/teams/:id/resume', wrap((req) => teams.resume(req.params.id, req.body ?? {})));
   api.post('/teams/:id/send-back', wrap((req) => teams.sendBack(req.params.id, req.body?.note)));
+  api.post('/teams/:id/fix-gaps', wrap((req) => teams.fixGaps(req.params.id, req.body?.note)));
   api.post('/teams/:id/finalize', wrap((req) => teams.finalize(req.params.id, { mode: req.body?.mode, pr: req.body?.pr })));
   api.post('/teams/:id/stop', wrap((req) => teams.stop(req.params.id)));
   api.post('/teams/:id/ask', wrap((req) => teams.ask(req.params.id, req.body?.text)));
