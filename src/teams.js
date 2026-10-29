@@ -44,7 +44,7 @@ const FILES = [
 const SYNONYMS = {
   agreed: 'agree', approved: 'approve', lgtm: 'approve', passed: 'pass', passes: 'pass', failed: 'fail', fails: 'fail',
   complete: 'done', completed: 'done', finished: 'done', question: 'questions', change: 'changes', request: 'changes',
-  rejected: 'changes', reject: 'changes',
+  rejected: 'changes', reject: 'changes', disagree: 'changes', disagreed: 'changes',
 };
 const ACTIVE = new Set(['analyze', 'discuss', 'implement', 'test', 'review', 'finalizing']);
 
@@ -150,9 +150,10 @@ export function subagents(team, dir) {
         description: SUB_DESCRIPTION[role],
         prompt: [
           DUTIES[role],
-          `You work for the lead of a team of AI agents. The lead's message tells you which files to read and which file to write in the team folder ${dir}. ` +
-            `Write that file, and end it with a line "verdict: <word>" using one of: ${VERDICTS[KIND_OF[role]].join(', ')}. ` +
-            "Then reply to the lead in two or three lines: what you concluded, and your verdict. Don't write other roles' files.",
+          `You work for the lead of a team of AI agents. The lead's message tells you which files in the team folder ${dir} to read. ` +
+            `Don't write report files: return your whole ${{ analyst: 'analysis', critic: 'critique', implementer: 'implementation notes', tester: 'test report', reviewer: 'review' }[role]} as your reply, in Markdown, ` +
+            `ending with a line "verdict: <word>" using one of: ${VERDICTS[KIND_OF[role]].join(', ')}. The lead saves it to the team folder as it is. ` +
+            "Don't ask the person questions: make the call yourself, say what you assumed and why, and carry on.",
         ].join('\n\n'),
         ...(team.settings.models?.[role] ? { model: team.settings.models[role] } : {}),
       },
@@ -172,13 +173,13 @@ export function leadPrompt(team, dir, baseRef) {
     s.critics
       ? `2. Discussion: ask ${s.critics === 2 ? 'two critic sub-agents (in parallel), critic 1 and critic 2,' : 'the critic sub-agent'} to review the latest analysis and write ${f('critique-<round>-<critic number>.md')}. ` +
         `If every critic's verdict is "agree", go on. Otherwise ask the analyst to address every point in ${f('analysis-<round + 1>.md')} (changing the analysis or saying why not), then ask the critics again. ` +
-        `At most ${s.maxRounds} rounds: if they still don't agree, write ${f('blocked-1.md')} (the next free number) saying what they disagree on, end it with "verdict: blocked", and stop.`
+        `At most ${s.maxRounds} rounds. If only small points are left then, have the analyst apply the critics' proposed fixes in the final analysis and go on; write ${f('blocked-1.md')} (the next free number), ending with "verdict: blocked", and stop only if they disagree on the approach itself.`
       : '2. There are no critics on this team: go on with the analysis as it is.',
     `3. Copy the agreed (latest) analysis to ${f('analysis.md')}.`,
     `4. Implementation: ask the implementer sub-agent to implement ${f('analysis.md')} in this working copy, commit on the current branch (no push, no pull request), and write ${f('implementation-<round>.md')}, starting at round 1. If its verdict is "blocked", write a blocked file as above and stop.`,
     `5. Test: ask the tester sub-agent to test it and write ${f('test-<round>.md')}${s.testCommand ? ` (the project's test command is: ${s.testCommand})` : ''}. On "fail", start the next implementation round with the test report.`,
     `6. Review: ask the reviewer sub-agent to review the change${baseRef ? ` (git diff ${baseRef.split(' @ ')[1] ?? baseRef}...HEAD)` : ''} against the analysis and the test report, and write ${f('review-<round>.md')}. On "changes", start the next implementation round with the review.`,
-    `At most ${s.maxLoops} implementation rounds: if the work is still sent back after that, write a blocked file saying what is left, and stop.`,
+    `At most ${s.maxLoops} implementation rounds: if the work is still sent back after that for anything beyond small fixes, write a blocked file saying what is left, and stop.`,
     '7. When the reviewer approves: stop. Tell the person in a few lines what the team built and what the reviewer said, and wait for their decision. Do not push, merge or open a pull request unless the person tells you to.',
   ];
   const quests =
@@ -188,12 +189,16 @@ export function leadPrompt(team, dir, baseRef) {
     "A question about the team's work isn't a quest: just answer it.";
   return [
     `You lead a team of AI agents solving one problem: ${SUB_ROLES.filter((r) => r !== 'critic' || s.critics).join(', ')}. They are your sub-agents (the Agent tool).`,
-    "You coordinate; you don't do their work. Delegate each step to the sub-agent for that role, give it the problem and exactly the file paths to read and to write, " +
-      'and read the verdict line at the end of the file it wrote. Every handoff goes through these files in the team folder; AI Agent Manager reads them to show the person how the team is doing. ' +
-      'Never write an analysis, critique, implementation note, test report or review yourself. If a file has no verdict line, ask that sub-agent to add it.',
+    "You coordinate; you don't do their work. Delegate each step to the sub-agent for that role and give it the problem and the paths of the files it should read. " +
+      'Sub-agents return their work as their reply, ending with a verdict line: save each reply, unedited, to the file named for that step, then read its verdict to decide the next step. ' +
+      'Every handoff goes through these files in the team folder; AI Agent Manager reads them to show the person how the team is doing. ' +
+      "Don't write an analysis, critique, implementation note, test report or review of your own: save what the sub-agent returned. If a reply has no verdict line, ask that sub-agent for it.",
+    'Run the whole quest without asking the person anything. You make the calls: choose between options yourself (the simplest one that meets the request), and record each decision and why in the file of that step. ' +
+      "Don't ask for permission or confirmation between steps; the person can stop you at any time. When the critics' remaining points come with concrete fixes, have the analyst fold them in and go on. " +
+      'Stop only when the reviewer approves (the end of the quest), or when the team needs something only the person can give (credentials, access, or a business decision with no sensible default): then write a blocked file saying exactly what is needed.',
     quests,
     `The steps of a quest (<n> is its number):\n${steps.join('\n')}`,
-    'Questions only the person can answer go in your questions file, as usual; keep the team going on a sensible default meanwhile.',
+    'If a question really is for the person, put it in your questions file, as usual, and keep the team going on a sensible default meanwhile.',
   ].join('\n\n');
 }
 

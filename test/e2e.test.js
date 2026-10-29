@@ -1848,12 +1848,14 @@ test('teams, one lead session: the roles are its sub-agents; it stays and takes 
   const subs = JSON.parse(launch.args[launch.args.indexOf('--agents') + 1]);
   assert.deepEqual(Object.keys(subs), ['analyst', 'critic', 'implementer', 'tester', 'reviewer']);
   assert.equal(subs.reviewer.model, 'opus');
-  assert.match(subs.tester.prompt, /do not fix product code[\s\S]*verdict: <word>" using one of: pass, fail/);
+  assert.match(subs.tester.prompt, /do not fix product code[\s\S]*Don't write report files: return your whole test report[\s\S]*verdict: <word>" using one of: pass, fail/);
   const system = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
   assert.match(system, /You lead a team of AI agents/);
   assert.match(system, /At most 2 rounds/);
   assert.match(system, /npm test/);
   assert.match(system, /You stay after a quest ends/);
+  assert.match(system, /Run the whole quest without asking the person/);
+  assert.match(system, /save each reply, unedited/);
   assert.match(launch.args[launch.args.indexOf('--') + 1], /Problem to solve:\nMake logout clear every token[\s\S]*quest 1[\s\S]*quest-1\/analysis-1\.md/);
 
   const teamNow = async () => (await call('GET', `/teams/${team.id}`)).body;

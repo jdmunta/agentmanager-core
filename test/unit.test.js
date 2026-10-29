@@ -656,6 +656,7 @@ test('team handoffs: the verdict line, in the forms models write it', () => {
   assert.equal(readVerdict('- verdict: `PASSED`', VERDICTS.test), 'pass');
   assert.equal(readVerdict('verdict: agree\n...\nverdict: questions', VERDICTS.critique), 'questions', 'the last one wins');
   assert.equal(readVerdict('Verdict: LGTM', VERDICTS.review), 'approve');
+  assert.equal(readVerdict('verdict: disagree', VERDICTS.critique), 'changes');
   assert.equal(readVerdict('verdict: maybe', VERDICTS.review), null, 'not an allowed word');
   assert.equal(readVerdict('No verdict here, the verdict is pending', VERDICTS.review), null);
   assert.equal(readVerdict('verdict: done', VERDICTS.test), null, "another kind's word");
@@ -688,7 +689,8 @@ test('team lead: sub-agents per role, and the steps it runs', () => {
   assert.match(p, /no critics on this team/);
   assert.match(p, /At most 2 implementation rounds/);
   assert.match(p, /git diff abc123def\.\.\.HEAD/);
-  assert.match(p, /Never write an analysis/);
+  assert.match(p, /save what the sub-agent returned/);
+  assert.match(p, /Stop only when the reviewer approves/);
   assert.match(p, /quest-1/);
   assert.match(p, /A question about the team's work isn't a quest/);
   assert.deepEqual(claude.optionArgs({ agents: { a: { description: 'd', prompt: 'p' } } }), ['--agents', '{"a":{"description":"d","prompt":"p"}}']);
