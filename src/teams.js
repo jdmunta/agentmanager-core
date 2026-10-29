@@ -6,11 +6,13 @@
 // reviewer approves, or when the agents can't agree within the round limits.
 // All members share one worktree and branch (the implementer's); only the implementer and the
 // tester change it, one at a time. Teams live in the state file next to the agents.
+import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
-import { paths } from './config.js';
+import { expandHome, paths } from './config.js';
+import * as git from './git.js';
 
 const err = (status, message) => Object.assign(new Error(message), { status });
 const now = () => new Date().toISOString();
@@ -35,6 +37,29 @@ const SYNONYMS = {
 const ACTIVE = new Set(['analyze', 'discuss', 'implement', 'test', 'review', 'finalizing']);
 
 export const teamDir = (id) => path.join(paths.teams, id);
+
+/**
+ * A new project's folder, made a git repository with an empty first commit on main, so the team
+ * gets a worktree and a branch like any other. An existing folder must be empty or already a repo.
+ */
+export function startRepo(dir) {
+  const g = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' }).toString().trim();
+  if (fs.existsSync(dir)) {
+    try {
+      if (g('rev-parse', '--is-inside-work-tree') === 'true') return { dir, created: false };
+    } catch {}
+    if (fs.readdirSync(dir).length) throw err(400, `${dir} has files but isn't a git repository: run "git init" there, or pick an empty or new folder`);
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  g('init', '-q', '-b', 'main');
+  try {
+    g('commit', '-q', '--allow-empty', '-m', 'Start the project');
+  } catch {
+    // No git identity configured on this machine: sign the empty first commit as AI Agent Manager.
+    g('-c', 'user.name=AI Agent Manager', '-c', 'user.email=agentmgr@localhost', 'commit', '-q', '--allow-empty', '-m', 'Start the project');
+  }
+  return { dir, created: true };
+}
 
 /** The verdict a handoff file ends with ("verdict: approve"), normalized; null if none or not allowed. */
 export function readVerdict(text, allowed) {
@@ -168,13 +193,29 @@ export class Teams extends EventEmitter {
   create({ intent, name, critics, maxRounds, maxLoops, testCommand, models, engines, ...opts } = {}) {
     intent = String(intent ?? '').trim();
     if (!intent) throw err(400, 'Describe the problem for the team');
-    if (!opts.repo && !opts.dir && !opts.project) throw err(400, 'A team needs a repository URL, a git folder or a project');
     const defaults = this.config.teams ?? {};
     const n = Number(critics ?? defaults.critics ?? 1);
     if (!Number.isInteger(n) || n < 0 || n > 2) throw err(400, 'critics must be 0, 1 or 2');
     const limit = (v, d) => Math.min(10, Math.max(1, Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : d));
     const id = `t${crypto.randomBytes(3).toString('hex')}`;
     const slug = (name || intent).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24).replace(/-+$/, '') || 'team';
+    // No repository yet: a new project in a folder of its own (or the new folder given).
+    let newProject = null;
+    if (!opts.repo && !opts.project) {
+      let target = opts.dir?.trim() ? path.resolve(expandHome(opts.dir.trim())) : null;
+      if (!target) {
+        const root = path.resolve(expandHome(defaults.newProjectsDir ?? path.join(paths.home, 'projects')));
+        // Whole words, up to 40 characters: the project's folder name.
+        const full = (name || intent).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'project';
+        const folder = full.length <= 40 ? full : full.slice(0, 41).replace(/-[^-]*$/, '') || full.slice(0, 40);
+        target = path.join(root, folder);
+        for (let i = 2; fs.existsSync(target); i++) target = path.join(root, `${folder}-${i}`);
+      }
+      // A repository is used as it is; a new or empty folder becomes one.
+      const repo = startRepo(target);
+      if (repo.created) newProject = repo.dir;
+      opts.dir = repo.dir;
+    }
     const dir = teamDir(id);
     fs.mkdirSync(dir, { recursive: true });
     const settings = {
@@ -185,7 +226,7 @@ export class Teams extends EventEmitter {
       models: { ...defaults.models, ...models },
       engines: { ...defaults.engines, ...engines },
     };
-    const team = { id, name: name?.trim() || slug, intent, dir, createdAt: now(), updatedAt: now(), settings, stage: 'analyze', round: 1, loop: 1, extraRounds: 0, extraLoops: 0, waiting: [], history: [], blocked: null, outcome: null, members: { critics: [] } };
+    const team = { id, name: name?.trim() || slug, intent, dir, newProject, createdAt: now(), updatedAt: now(), settings, stage: 'analyze', round: 1, loop: 1, extraRounds: 0, extraLoops: 0, waiting: [], history: [], blocked: null, outcome: null, members: { critics: [] } };
     this.store.data.teams[id] = team;
 
     const base = { ...opts, intent, start: false, planReview: false };
@@ -456,22 +497,50 @@ export class Teams extends EventEmitter {
     return this.view(id);
   }
 
-  /** Accept the approved work: the implementer pushes and opens a pull request, or the branch is kept as is. */
-  finalize(id, { pr = true } = {}) {
+  /**
+   * Accept the approved work. mode "pr": the implementer pushes and opens a pull request;
+   * "publish" (no GitHub repository yet): it creates a private one first; "merge": the branch is
+   * fast-forwarded into the local base branch; "keep": the branch stays as it is.
+   */
+  async finalize(id, { mode, pr } = {}) {
     const team = this.get(id);
     if (team.stage !== 'ready') throw err(409, 'The team has nothing waiting for your review');
-    if (!pr) {
-      Object.assign(team, { stage: 'done', outcome: 'kept', finishedAt: now() });
+    mode ??= pr === false ? 'keep' : 'pr';
+    if (!['pr', 'publish', 'merge', 'keep'].includes(mode)) throw err(400, 'mode must be pr, publish, merge or keep');
+    const owner = this.manager.store.get(team.members.implementer);
+    if (mode === 'keep' || mode === 'merge') {
+      if (mode === 'merge') await this.merge(owner);
+      Object.assign(team, { stage: 'done', outcome: mode === 'merge' ? 'merged' : 'kept', finishedAt: now() });
       this.save(team);
       return this.view(id);
     }
+    const remote = owner?.workdir && (await git.hasRemote(owner.workdir));
+    if (mode === 'pr' && !remote) throw err(409, 'This project has no remote to open a pull request on: publish it to GitHub, merge into main, or keep the branch');
+    const files = `the files are in ${team.dir}`;
+    const publish = !remote
+      ? `This project has no GitHub repository yet. Create a private one named "${path.basename(owner?.sourceDir ?? team.name)}" with \`gh repo create <name> --private --source ${owner?.sourceDir ?? '.'} --remote origin\`, push the base branch and this branch to it, then open`
+      : 'Push the branch and open';
     team.stage = 'finalizing';
     this.assign(team, [{
       role: 'implementer', member: team.members.implementer, kind: 'final', file: 'final.md',
-      text: `The team's work is approved. Push the branch and open a pull request with a title from the problem and a body that summarizes the analysis, the changes, the test report and the review (the files are in ${team.dir}). Then write the pull request's link to ${this.path(team, 'final.md')} and end it with "verdict: done".`,
+      text: `The team's work is approved. ${publish} a pull request with a title from the problem and a body that summarizes the analysis, the changes, the test report and the review (${files}). Then write the pull request's link to ${this.path(team, 'final.md')} and end it with "verdict: done".`,
     }]);
     this.save(team);
     return this.view(id);
+  }
+
+  /** Fast-forward the base branch, checked out in the main folder, to the team's branch. */
+  async merge(owner) {
+    if (!owner?.sourceDir || !owner.branch) throw err(409, "The team's branch isn't in a worktree of a local repository; merge it yourself");
+    const top = owner.sourceDir;
+    const current = await git.run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: top });
+    const dirty = await git.run('git', ['status', '--porcelain'], { cwd: top });
+    if (dirty) throw err(409, `${top} has uncommitted changes; commit or stash them, then merge`);
+    try {
+      await git.run('git', ['merge', '--ff-only', owner.branch], { cwd: top });
+    } catch {
+      throw err(409, `${current} in ${top} has moved since the team branched; merge ${owner.branch} yourself, or send the work back`);
+    }
   }
 
   /** Stop the team: its agents close (they can be resumed); nothing is deleted. */
@@ -536,6 +605,9 @@ export class Teams extends EventEmitter {
       members,
       files,
       branch: owner?.branch ?? null,
+      folder: owner?.sourceDir ?? owner?.workdir ?? null,
+      // No GitHub (or other) remote: publish, merge locally or keep, instead of a pull request.
+      remote: Boolean(owner?.git?.remote),
       prs: Object.values(owner?.prs ?? {}).map((p) => ({ url: p.url, number: p.number, state: p.state })),
       costUsd: costs.length ? costs.reduce((x, y) => x + y, 0) : null,
     };

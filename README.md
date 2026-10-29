@@ -172,8 +172,8 @@ agentmgr answer <agent> <question-id> "…"     # answer a question from the inb
 agentmgr tell <agent> "…"                     # send a message into the session (when it's idle)
 agentmgr fork <agent> [-c 3] [-m "…"]         # new agent from now (or checkpoint 3), its own worktree
 agentmgr checkpoints <agent>                  # snapshots saved at the end of each turn
-agentmgr team start "problem" -r <repo> [-c 2] [-t "npm test"] [--role-model reviewer=opus]
-agentmgr team show [team] | finalize <team> [--no-pr] | send-back <team> "…" | continue <team> ["note"] | skip <team> | stop <team>
+agentmgr team start "problem" [-r <repo> | -d <folder>] [-c 2] [-t "npm test"] [--role-model reviewer=opus]
+agentmgr team show [team] | finalize <team> [--merge | --publish | --keep] | send-back <team> "…" | continue <team> ["note"] | skip <team> | stop <team>
 agentmgr race start "intent" -v opus -v "sonnet|keep it small" -r <repo> -t "npm test"
 agentmgr race show [race] | test <race> | pick <race> <agent> [--cleanup]
 agentmgr flush                                # save session IDs, scrollback, usage and state now
@@ -559,7 +559,9 @@ The source agent keeps running untouched.
 
 The agents hand off through Markdown files in the team's folder (`~/.agentmanager/teams/<id>/`: `analysis-1.md`, `critique-1-1.md`, `test-1.md`, `review-1.md`, …), each ending with a `verdict:` line. AI Agent Manager reads the verdict and tells the next agent what to read, so no agent waits on another, and you can read every handoff in the team view. Only one agent works at a time, and all of them share one worktree and branch.
 
-**You step in only at the end:** when the reviewer approves, the team shows up in your inbox. **Open a pull request** (the implementer pushes and opens it), **Keep the branch**, or **Send back** with what to change (it goes through test and review again). If the analyst and the critics don't agree within 3 rounds, or the tester and reviewer still send the work back after 3, the team stops and asks you: one more round (with a note), or move on.
+**You step in only at the end:** when the reviewer approves, the team shows up in your inbox. **Open a pull request** (the implementer pushes and opens it), **Keep the branch**, or **Send back** with what to change (it goes through test and review again).
+
+**A new project, with no repository yet:** leave the repository and folder empty (or give a folder that doesn't exist yet). The team creates the folder (under `~/.agentmanager/projects/` by default; `teams.newProjectsDir` in config.json), starts a git repository with an empty first commit on `main`, and works on its own branch. At the end you choose **Merge into main** (a fast-forward of the local `main`), **Publish to GitHub** (the implementer creates a private repository with `gh`, pushes, and opens a pull request), or **Keep the branch**. If the analyst and the critics don't agree within 3 rounds, or the tester and reviewer still send the work back after 3, the team stops and asks you: one more round (with a note), or move on.
 
 **Cost:** a team is up to six sessions on one problem, so expect several times the tokens of a single agent. Pick the model per role, for example a stronger model for the analyst and the reviewer: `analyst=opus reviewer=opus` in the form, or `--role-model` on the command line. Defaults go in config.json under `teams`: `critics`, `maxRounds`, `maxLoops`, `models`, `engines` (a critic or reviewer on another engine sees different things).
 
@@ -772,7 +774,7 @@ State lives in `~/.agentmanager/` (`state.json`, `daemon.log`, `repos/` for shar
   "inbox": true,
   "maxCheckpoints": 40,
   "raceTestTimeoutSec": 900,
-  "teams": { "critics": 1, "maxRounds": 3, "maxLoops": 3, "models": { "analyst": "opus", "reviewer": "opus" } },
+  "teams": { "critics": 1, "maxRounds": 3, "maxLoops": 3, "newProjectsDir": "~/projects", "models": { "analyst": "opus", "reviewer": "opus" } },
   "conflictRefreshSec": 60,
   "stuck": { "repeatFailures": 3, "thrashReverts": 2, "thrashEdits": 10, "driftMinutes": 20, "driftActions": 25 },
   "judge": { "enabled": true, "model": "haiku", "dailyCalls": 300 },
