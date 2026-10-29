@@ -640,14 +640,15 @@ export async function main(argv) {
     .option('-m, --model <model>', 'model for every role')
     .option('--role-model <role=model...>', 'model for one role, e.g. --role-model analyst=opus reviewer=opus')
     .option('--max-rounds <n>', 'analysis rounds before it asks you (default 3)')
-    .option('--max-loops <n>', 'fix rounds before it asks you (default 3)')
+    .option('--max-loops <n>', 'fix rounds per request before it asks you (default 3)')
+    .option('--gap-rounds <n>', 'rounds it runs on its own for what the reviewer says is still missing (default 3, 0: off)')
     .option('--separate', 'one agent per role instead of one lead session with sub-agents')
     .action(async (problem, opts) => {
       await daemon();
       const models = Object.fromEntries((opts.roleModel ?? []).map((p) => p.split('=')).filter(([k, v]) => k && v));
       const t = await api('POST', '/teams', {
         intent: problem, repo: opts.repo, dir: opts.dir, project: opts.project, base: opts.base, critics: Number(opts.critics),
-        testCommand: opts.test, model: opts.model, models, maxRounds: opts.maxRounds, maxLoops: opts.maxLoops,
+        testCommand: opts.test, model: opts.model, models, maxRounds: opts.maxRounds, maxLoops: opts.maxLoops, gapRounds: opts.gapRounds,
         ...(opts.separate ? { mode: 'agents' } : {}),
       });
       console.log(`${green('👥')} team ${bold(t.id)}: ${t.mode === 'lead' ? `lead ${t.members[0].id}, with ${t.subagents.map((r) => r.role).join(', ')} as sub-agents` : t.members.map((m) => `${m.role} (${m.id})`).join(', ')}`);
@@ -666,7 +667,7 @@ export async function main(argv) {
         return table(list.map((t) => [t.id, t.name, t.stage, `${t.loop}`, t.intent.split('\n')[0].slice(0, 50)]), ['TEAM', 'NAME', 'STAGE', 'ROUND', 'PROBLEM']);
       }
       const t = await api('GET', `/teams/${id}`);
-      console.log(`${bold(t.name)}  ${t.mode === 'lead' ? `quest ${t.quest} · ` : ''}${t.stage}${t.blocked ? `: ${t.blocked.reason}` : ''}`);
+      console.log(`${bold(t.name)}  ${t.mode === 'lead' || t.quest > 1 ? `quest ${t.quest}${t.gapRound ? ` (gap round ${t.gapRound})` : ''} · ` : ''}${t.stage}${t.blocked ? `: ${t.blocked.reason}` : ''}`);
       console.log(dim(`  ${(t.request ?? t.intent).split('\n')[0]}`));
       for (const q of t.quests ?? []) console.log(dim(`  quest ${q.n}: ${q.request.split('\n')[0].slice(0, 60)} (${q.outcome})`));
       console.log(dim(`  folder ${t.dir}${t.branch ? ` · branch ${t.branch}` : ''}`));
@@ -675,7 +676,8 @@ export async function main(argv) {
         console.log('');
         table(t.history.map((h) => [h.role, h.verdict, h.file, h.summary.slice(0, 70)]), ['FROM', 'VERDICT', 'FILE', 'SUMMARY']);
       }
-      if (t.stage === 'ready') console.log(`\n${green('✓')} approved: agentmgr team finalize ${t.id} ${t.remote ? '[--keep]' : '--merge | --publish | --keep'}, or agentmgr team send-back ${t.id} "<what to change>"`);
+      if (t.stage === 'ready') console.log(`\n${green('✓')} approved: agentmgr team finalize ${t.id} ${t.remote ? '[--keep]' : '--merge | --publish | --keep'}, or agentmgr team send-back ${t.id} "<what to change>"${t.gaps ? `, or agentmgr team fix-gaps ${t.id}` : ''}`);
+      else if (t.stage === 'done' && t.gaps) console.log(`\n${yellow('!')} the last review lists gaps: agentmgr team fix-gaps ${t.id} ["note"]`);
       if (t.stage === 'blocked') console.log(`\n${yellow('!')} decide: agentmgr team continue ${t.id} ["note"], or agentmgr team skip ${t.id}`);
     });
   teamCmd
@@ -701,6 +703,16 @@ export async function main(argv) {
       await daemon();
       await api('POST', `/teams/${id}/send-back`, { note });
       console.log(`${green('↩')} sent back to the implementer`);
+    });
+  teamCmd
+    .command('fix-gaps')
+    .description('Another round, from analysis to review, for what the last review says is missing')
+    .argument('<team>')
+    .argument('[note]', "what's missing, if the review lists nothing")
+    .action(async (id, note) => {
+      await daemon();
+      await api('POST', `/teams/${id}/fix-gaps`, { note });
+      console.log(`${green('…')} gap round started`);
     });
   teamCmd
     .command('continue')

@@ -46,7 +46,9 @@ const SYNONYMS = {
   complete: 'done', completed: 'done', finished: 'done', question: 'questions', change: 'changes', request: 'changes',
   rejected: 'changes', reject: 'changes', disagree: 'changes', disagreed: 'changes',
 };
-const ACTIVE = new Set(['analyze', 'discuss', 'implement', 'test', 'review', 'finalizing']);
+// "gaps": a lead's reviewer approved work that leaves parts of the request unbuilt; the lead is
+// starting the round that builds them.
+const ACTIVE = new Set(['analyze', 'discuss', 'implement', 'test', 'review', 'gaps', 'finalizing']);
 
 export const teamDir = (id) => path.join(paths.teams, id);
 
@@ -82,6 +84,25 @@ export function readVerdict(text, allowed) {
   return allowed.includes(v) ? v : (allowed.find((a) => v.startsWith(a)) ?? null);
 }
 
+/** Whether a review found the whole request built: its last "coverage:" line ("complete" or "partial"); null if none. */
+export function readCoverage(text) {
+  const all = [...String(text ?? '').matchAll(/^[\s>*_#-]*coverage[\s*_`]*:[\s*_`]*([a-z]+)/gim)];
+  const word = all.at(-1)?.[1].toLowerCase();
+  if (!word) return null;
+  if (['complete', 'full', 'covered'].includes(word)) return 'complete';
+  if (['partial', 'incomplete', 'gaps', 'missing'].includes(word)) return 'partial';
+  return null;
+}
+
+/** The "Gaps" section of a review: what the request asks for that isn't built yet. */
+export function gapsOf(text) {
+  const m = /^(#{1,6})\s*gaps\b.*$/im.exec(String(text ?? ''));
+  if (!m) return '';
+  const rest = text.slice(m.index + m[0].length);
+  const end = rest.search(new RegExp(`^#{1,${m[1].length}}\\s`, 'm'));
+  return (end < 0 ? rest : rest.slice(0, end)).replace(/^[\s>*_-]*(verdict|coverage)\b.*$/gim, '').trim();
+}
+
 /** A line or two from a handoff file for the timeline: its first prose, without headings or the verdict. */
 export function summarize(text, max = 240) {
   const lines = String(text ?? '')
@@ -115,7 +136,10 @@ const DUTIES = {
   reviewer:
     'Your job: review the change as a senior engineer would before it merges: correctness, edge cases, security, tests, readability, ' +
     "the project's conventions, and whether it does what the analysis agreed. Do not change any project files. " +
-    'Your review has a short summary, findings marked [must], [should] or [nit], and what is good. Use "approve" only when no [must] finding is left.',
+    'Your review has a short summary, findings marked [must], [should] or [nit], and what is good. Use "approve" only when no [must] finding is left. ' +
+    'Then check coverage: compare what is built with everything the request asks for (in a gap round, the request it fills gaps for). ' +
+    'In a section "## Gaps", list each part that is asked for but not built yet, or write "None". Just before the verdict line, add a line "coverage: complete" or "coverage: partial". ' +
+    'Missing parts alone are no reason for "changes": approve good work that is only incomplete; the team builds the gaps in another round.',
 };
 
 /** Instructions every launch of a team member gets (an appended system prompt). */
@@ -179,8 +203,12 @@ export function leadPrompt(team, dir, baseRef) {
     `4. Implementation: ask the implementer sub-agent to implement ${f('analysis.md')} in this working copy, commit on the current branch (no push, no pull request), and write ${f('implementation-<round>.md')}, starting at round 1. If its verdict is "blocked", write a blocked file as above and stop.`,
     `5. Test: ask the tester sub-agent to test it and write ${f('test-<round>.md')}${s.testCommand ? ` (the project's test command is: ${s.testCommand})` : ''}. On "fail", start the next implementation round with the test report.`,
     `6. Review: ask the reviewer sub-agent to review the change${baseRef ? ` (git diff ${baseRef.split(' @ ')[1] ?? baseRef}...HEAD)` : ''} against the analysis and the test report, and write ${f('review-<round>.md')}. On "changes", start the next implementation round with the review.`,
-    `At most ${s.maxLoops} implementation rounds: if the work is still sent back after that for anything beyond small fixes, write a blocked file saying what is left, and stop.`,
-    '7. When the reviewer approves: stop. Tell the person in a few lines what the team built and what the reviewer said, and wait for their decision. Do not push, merge or open a pull request unless the person tells you to.',
+    `At most ${s.maxLoops} implementation rounds per quest: if the work is still sent back after that for anything beyond small fixes, write a blocked file saying what is left, and stop.`,
+    s.gapRounds
+      ? `7. When the reviewer approves with "coverage: partial" (the review lists gaps), and fewer than ${s.gapRounds} gap round${s.gapRounds > 1 ? 's' : ''} have run for this request, start a gap round yourself, without asking: it is the next quest. ` +
+        `Write ${path.join(dir, 'quest-<next n>', 'request.md')} starting with the heading "# Gap round <k> of ${s.gapRounds}", then the request it fills gaps for (the problem, or the person's request) and the gaps from the review, and run the steps for it. The reviewer checks coverage against that request.`
+      : '7. Gap rounds are off for this team: when the reviewer approves, stop, even if the review lists gaps.',
+    '8. Otherwise, when the reviewer approves: stop. Tell the person in a few lines what the team built, what the reviewer said, and any gaps still left, and wait for their decision. Do not push, merge or open a pull request unless the person tells you to.',
   ];
   const quests =
     `Each request the team works on is a quest with its own folder: the first problem is quest 1, in ${path.join(dir, 'quest-1')}. ` +
@@ -279,7 +307,7 @@ export class Teams extends EventEmitter {
    * One problem, a team of agents. Needs a repository URL, a git folder or a project (the team
    * works in one worktree). critics: 0-2. models / engines: per role, e.g. { reviewer: "opus" }.
    */
-  create({ intent, name, critics, maxRounds, maxLoops, testCommand, models, engines, mode, ...opts } = {}) {
+  create({ intent, name, critics, maxRounds, maxLoops, gapRounds, testCommand, models, engines, mode, ...opts } = {}) {
     intent = String(intent ?? '').trim();
     if (!intent) throw err(400, 'Describe the problem for the team');
     const defaults = this.config.teams ?? {};
@@ -323,17 +351,19 @@ export class Teams extends EventEmitter {
       critics: n,
       maxRounds: limit(maxRounds, defaults.maxRounds ?? 3),
       maxLoops: limit(maxLoops, defaults.maxLoops ?? 3),
+      // Rounds the team starts on its own for what the reviewer says is still missing (0: off).
+      gapRounds: Math.min(10, Math.max(0, Number.isInteger(Number(gapRounds ?? defaults.gapRounds ?? 3)) ? Number(gapRounds ?? defaults.gapRounds ?? 3) : 3)),
       testCommand: testCommand?.trim() || defaults.testCommand || null,
       models: { ...defaults.models, ...models },
       engines: roleEngines,
     };
-    const team = { id, mode, name: name?.trim() || slug, intent, dir, newProject, createdAt: now(), updatedAt: now(), settings, stage: 'analyze', round: 1, loop: 1, extraRounds: 0, extraLoops: 0, waiting: [], history: [], blocked: null, outcome: null, members: { critics: [] } };
+    const team = { id, mode, name: name?.trim() || slug, intent, dir, newProject, createdAt: now(), updatedAt: now(), settings, stage: 'analyze', round: 1, loop: 1, extraRounds: 0, extraLoops: 0, quest: 1, quests: [], gapRound: 0, waiting: [], history: [], blocked: null, outcome: null, members: { critics: [] } };
     this.store.data.teams[id] = team;
 
     const base = { ...opts, intent, start: false, planReview: false };
     if (mode === 'lead') {
       team.members = { lead: this.manager.create({ ...base, name: slug, worktree: true, model: settings.models.lead || opts.model, team: { id, role: 'lead' } }).id };
-      Object.assign(team, { seen: {}, quest: 1, quests: [] });
+      team.seen = {};
       fs.mkdirSync(this.questPath(team, ''), { recursive: true });
       this.send(team, team.members.lead, `This is quest 1. Start the team: ask the analyst for the analysis (${this.questPath(team, 'analysis-1.md')}).`);
       this.save(team);
@@ -367,13 +397,22 @@ export class Teams extends EventEmitter {
     return this.view(id);
   }
 
+  /** Where the current quest keeps a handoff file. */
   path(team, file) {
-    return path.join(team.dir, file);
+    return path.join(team.dir, this.rel(team, file));
   }
 
-  /** Where a lead's current quest keeps its files (other teams use the team folder itself). */
+  /**
+   * A handoff file's name within the team folder: a lead's quests each have a folder; a team of
+   * separate agents keeps its first quest in the team folder itself, and gap rounds in folders.
+   */
+  rel(team, file) {
+    const q = team.quest ?? 1;
+    return team.mode === 'lead' || q > 1 ? path.join(`quest-${q}`, file) : file;
+  }
+
   questPath(team, file) {
-    return team.mode === 'lead' ? path.join(team.dir, `quest-${team.quest ?? 1}`, file) : this.path(team, file);
+    return this.path(team, file);
   }
 
   /** Give out the next step: each task names the member, the file it writes and the message it gets. */
@@ -454,12 +493,13 @@ export class Teams extends EventEmitter {
       if (!verdict) continue; // still being written, or the lead asks for the verdict line
       team.seen[rel] = mtime;
       const num = Number(m[1] ?? 0);
-      const entry = { at: now(), stage: team.stage, round: kind === 'analysis' || kind === 'critique' ? num : team.round, loop: ['implementation', 'test', 'review'].includes(kind) ? num : team.loop, role, ...(kind === 'critique' ? { n: Number(m[2]) } : {}), member: team.members.lead, file: rel, verdict, summary: summarize(text) };
+      const coverage = kind === 'review' ? readCoverage(text) : null;
+      const entry = { at: now(), stage: team.stage, round: kind === 'analysis' || kind === 'critique' ? num : team.round, loop: ['implementation', 'test', 'review'].includes(kind) ? num : team.loop, role, ...(kind === 'critique' ? { n: Number(m[2]) } : {}), member: team.members.lead, file: rel, verdict, ...(coverage ? { coverage } : {}), summary: summarize(text) };
       // A rewritten file replaces its entry.
       team.history = team.history.filter((h) => h.file !== rel).concat(entry);
       if (kind === 'analysis') team.round = Math.max(team.round, num);
       if (['implementation', 'test', 'review'].includes(kind)) team.loop = Math.max(team.loop, num);
-      team.stage = this.leadStage(team, kind, verdict, num);
+      team.stage = this.leadStage(team, kind, verdict, num, coverage);
       if (kind === 'blocked') team.blocked = { reason: entry.summary || 'The team stopped', at: team.history.some((h) => h.role === 'implementer') ? 'loops' : 'discuss', since: now() };
       if (kind === 'final') Object.assign(team, { outcome: 'pr', finishedAt: now() });
       changed = true;
@@ -474,15 +514,21 @@ export class Teams extends EventEmitter {
       n: team.quest ?? 1,
       request: team.request ?? team.intent,
       stage: team.stage,
-      outcome: team.outcome ?? (team.stage === 'ready' ? 'approved, left as is' : team.stage === 'done' ? 'done' : `left at ${team.stage}`),
+      outcome: team.outcome ?? ({ ready: 'approved, left as is', gaps: 'approved, with gaps', done: 'done' }[team.stage] ?? `left at ${team.stage}`),
       history: team.history,
       finishedAt: now(),
     });
     let request = '';
+    let gap = false;
     try {
-      request = fs.readFileSync(path.join(team.dir, `quest-${n}`, 'request.md'), 'utf8').replace(/^#.*\n/, '').trim();
+      const raw = fs.readFileSync(path.join(team.dir, `quest-${n}`, 'request.md'), 'utf8');
+      // A gap round keeps its heading ("Gap round 2 of 3"); other requests drop theirs.
+      gap = /^#+\s*gap round\b/i.test(raw.trimStart());
+      request = (gap ? raw.trimStart().replace(/^#+\s*/, '') : raw.replace(/^#.*\n/, '')).trim();
     } catch {}
-    Object.assign(team, { quest: n, request: request || `Quest ${n}`, stage: 'analyze', round: 1, loop: 1, history: [], blocked: null, outcome: null, finishedAt: null });
+    // Gap rounds count up within one request; the person's next request starts again.
+    team.gapRound = gap ? (team.gapRound ?? 0) + 1 : 0;
+    Object.assign(team, { quest: n, request: request || `Quest ${n}`, stage: 'analyze', round: 1, loop: 1, extraRounds: 0, extraLoops: 0, waiting: [], history: [], blocked: null, outcome: null, finishedAt: null });
   }
 
   /** Give the lead new work from the team view or the CLI: it becomes the next quest. */
@@ -497,7 +543,7 @@ export class Teams extends EventEmitter {
   }
 
   /** Where a lead's team stands after a handoff file. */
-  leadStage(team, kind, verdict, num) {
+  leadStage(team, kind, verdict, num, coverage) {
     switch (kind) {
       case 'analysis':
         return team.settings.critics ? 'discuss' : 'implement';
@@ -510,7 +556,9 @@ export class Teams extends EventEmitter {
       case 'test':
         return verdict === 'pass' ? 'review' : 'implement';
       case 'review':
-        return verdict === 'approve' ? 'ready' : 'implement';
+        if (verdict !== 'approve') return 'implement';
+        // Parts still missing and gap rounds left: the lead starts the next round itself.
+        return coverage === 'partial' && (team.gapRound ?? 0) < (team.settings.gapRounds ?? 0) ? 'gaps' : 'ready';
       case 'blocked':
         return 'blocked';
       case 'final':
@@ -553,8 +601,9 @@ export class Teams extends EventEmitter {
         }
         continue;
       }
-      Object.assign(w, { verdict, summary: summarize(text), at: now() });
-      team.history.push({ at: w.at, stage: team.stage, round: team.round, loop: team.loop, role: w.role, n: w.n, member: w.member, file: w.file, verdict, summary: w.summary });
+      const coverage = w.kind === 'review' ? readCoverage(text) : null;
+      Object.assign(w, { verdict, summary: summarize(text), at: now(), ...(coverage ? { coverage } : {}) });
+      team.history.push({ at: w.at, stage: team.stage, round: team.round, loop: team.loop, role: w.role, n: w.n, member: w.member, file: this.rel(team, w.file), verdict, ...(coverage ? { coverage } : {}), summary: w.summary });
       changed = true;
     }
     if (team.waiting.every((w) => w.verdict)) this.advance(team);
@@ -607,12 +656,13 @@ export class Teams extends EventEmitter {
         const sha = this.manager.store.get(team.members.implementer)?.baseRef?.split(' @ ')[1];
         this.assign(team, [{
           role: 'reviewer', member: team.members.reviewer, kind: 'review', file,
-          text: `Review the change on this branch (${sha ? `git diff ${sha.slice(0, 12)}...HEAD` : 'against its base branch'}). Read the analysis ${f('analysis.md')}, the implementation notes ${f(`implementation-${team.loop}.md`)} and the test report ${f(`test-${team.loop}.md`)}. Write your review to ${f(file)}. End it with "verdict: approve" or "verdict: changes".`,
+          text: `Review the change on this branch (${sha ? `git diff ${sha.slice(0, 12)}...HEAD` : 'against its base branch'}). Read the analysis ${f('analysis.md')}, the implementation notes ${f(`implementation-${team.loop}.md`)} and the test report ${f(`test-${team.loop}.md`)}. Check coverage against ${team.quest > 1 ? `the request in ${f('request.md')}` : 'the whole problem'}. Write your review to ${f(file)}, with its "## Gaps" section and, just before the verdict, "coverage: complete" or "coverage: partial". End it with "verdict: approve" or "verdict: changes".`,
         }]);
         break;
       }
       case 'review': {
         if (done[0].verdict === 'changes') return this.sendBackFrom(team, 'reviewer', done[0].file);
+        if (done[0].coverage === 'partial' && team.gapRound < s.gapRounds) return this.gapRound(team, { auto: true });
         team.stage = 'ready';
         team.waiting = [];
         break;
@@ -637,7 +687,7 @@ export class Teams extends EventEmitter {
     team.stage = 'analyze';
     const critiques = team.members.critics.map((_, i) => {
       const file = `critique-${prev}-${i + 1}.md`;
-      const v = team.history.findLast((h) => h.file === file)?.verdict;
+      const v = team.history.findLast((h) => h.file === this.rel(team, file))?.verdict;
       return `- ${f(file)}${v ? ` (${v})` : ''}`;
     });
     const file = `analysis-${team.round}.md`;
@@ -674,6 +724,63 @@ export class Teams extends EventEmitter {
       role: 'implementer', member: team.members.implementer, kind: 'implementation', file,
       text: `${why}\n\nMake the changes, commit, and write your implementation notes for this round to ${this.path(team, file)}, ending with "verdict: done" (or "verdict: blocked" with the reason).`,
     }]);
+  }
+
+  /** The latest review of this quest that lists gaps, if any: { file, text }. */
+  lastGaps(team) {
+    const h = team.history.findLast((x) => x.role === 'reviewer');
+    if (h?.coverage !== 'partial') return null;
+    try {
+      return { file: path.join(team.dir, h.file), text: fs.readFileSync(path.join(team.dir, h.file), 'utf8') };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * A team of separate agents builds what the reviewer says is still missing: the next quest,
+   * from a new analysis, on the same branch. `auto`: started by the team within its gap rounds.
+   */
+  gapRound(team, { auto = false, note } = {}) {
+    const review = this.lastGaps(team);
+    const k = (team.gapRound ?? 0) + 1;
+    const base = team.quests?.length && team.request?.match(/^gap round\b/i) ? team.quests.findLast((q) => !/^gap round\b/i.test(q.request))?.request : null;
+    const request = base ?? team.request ?? team.intent;
+    const title = `Gap round ${k}${auto ? ` of ${team.settings.gapRounds}` : ''}`;
+    const gaps = review ? gapsOf(review.text) : '';
+    const n = (team.quest ?? 1) + 1;
+    if (team.stage === 'review') team.stage = 'gaps';
+    const dir = path.join(team.dir, `quest-${n}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'request.md'),
+      `# ${title}\n\nBuild what is still missing from this request:\n\n${request.replace(/^gap round[^\n]*\n+/i, '')}\n\n## Gaps the reviewer found\n\n${gaps || (review ? `See ${review.file}.` : 'None listed.')}\n${note ? `\n## From the person\n\n${note}\n` : ''}`,
+    );
+    this.nextQuest(team, n);
+    const f = (file) => this.path(team, file);
+    this.assign(team, [{
+      role: 'analyst', member: team.members.analyst, kind: 'analysis', file: 'analysis-1.md',
+      text: `${title}: the reviewer approved the work so far but found parts of the request not built yet${review ? ` (${review.file}, section Gaps)` : ''}. This round builds them, on the same branch: the request is in ${f('request.md')}. Study the code as it is now and write an analysis for what is missing to ${f('analysis-1.md')}. End it with "verdict: ready".`,
+    }]);
+    this.save(team);
+    return this.view(team.id);
+  }
+
+  /** The person asks for another round on what the last review says is missing (or on their note). */
+  fixGaps(id, note) {
+    const team = this.get(id);
+    if (!['ready', 'done'].includes(team.stage)) throw err(409, "The team is busy; wait until it's done or waiting for you");
+    note = note?.trim() || null;
+    if (!this.lastGaps(team) && !note) throw err(400, "The last review lists no gaps: say what's missing");
+    if (team.mode === 'lead') {
+      const review = this.lastGaps(team);
+      return this.toLead(
+        team,
+        `The person wants a gap round now (beyond the team's gap round limit if needed): start the next quest with ${path.join(team.dir, `quest-${team.quest + 1}`, 'request.md')}, headed "# Gap round ${(team.gapRound ?? 0) + 1}", for ${review ? `the gaps in ${review.file}` : 'what the person says is missing'}, and run the steps for it.${note ? `\n\nFrom the person:\n${note}` : ''}`,
+        'gaps',
+      );
+    }
+    return this.gapRound(team, { note });
   }
 
   block(team, reason, at) {
@@ -724,7 +831,7 @@ export class Teams extends EventEmitter {
     } else {
       if (at === 'loops') team.extraLoops++;
       const last = team.history.findLast((h) => ['test', 'review', 'implement'].includes(h.stage));
-      this.nextLoop(team, `${last ? `Latest: ${this.path(team, last.file)} (${last.verdict}).` : ''}${note ? `\n\nFrom the person:\n${note}` : ''}`.trim());
+      this.nextLoop(team, `${last ? `Latest: ${path.join(team.dir, last.file)} (${last.verdict}).` : ''}${note ? `\n\nFrom the person:\n${note}` : ''}`.trim());
     }
     this.save(team);
     return this.view(id);
@@ -823,7 +930,7 @@ export class Teams extends EventEmitter {
     const team = this.get(id);
     if (!/^(quest-\d+\/)?[\w-][\w.-]*\.md$/.test(name)) throw err(400, 'Not a team file');
     try {
-      return { name, markdown: fs.readFileSync(this.path(team, name), 'utf8') };
+      return { name, markdown: fs.readFileSync(path.join(team.dir, name), 'utf8') };
     } catch {
       throw err(404, `No file ${name} yet`);
     }
@@ -858,6 +965,8 @@ export class Teams extends EventEmitter {
       // A lead's roles, played by its sub-agents.
       subagents: team.mode === 'lead' ? SUB_ROLES.filter((r) => r !== 'critic' || team.settings.critics).map((role) => ({ role, model: team.settings.models?.[role] ?? null })) : [],
       files,
+      // What the latest review says is still missing: the person can run a gap round for it.
+      gaps: team.history.findLast((h) => h.role === 'reviewer')?.coverage === 'partial',
       branch: owner?.branch ?? null,
       folder: owner?.sourceDir ?? owner?.workdir ?? null,
       // No GitHub (or other) remote: publish, merge locally or keep, instead of a pull request.
