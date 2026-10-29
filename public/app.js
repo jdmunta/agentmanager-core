@@ -14,6 +14,9 @@ let showCompleted = false;
 const races = new Map(); // race id -> scoreboard
 let openRaceId = null;
 let raceDiff = null; // { agentId, text }
+const teams = new Map(); // team id -> team view
+let openTeamId = null;
+let teamFile = null; // { name, markdown } shown in the team view
 // #<id> selects an agent; #<id>/term also opens its terminal.
 const loginHash = location.hash.match(/(?:^#|&)login=([\w-]+)/)?.[1] ?? null;
 // From the hub: #ticket=<one-time ticket>&go=<agent>/term
@@ -844,12 +847,13 @@ function flags(a) {
     a.conflicts?.length ? `<span class="flag warn" title="Changes the same files as ${esc(a.conflicts.map((c) => c.agent.name).join(', '))}">⚔</span>` : '',
     q ? `<span class="flag ask" title="${q} open question${q > 1 ? 's' : ''}">?${q > 1 ? q : ''}</span>` : '',
     a.raceId ? `<span class="flag" title="Race attempt${a.variant?.label ? `: ${esc(a.variant.label)}` : ''}">🏁</span>` : '',
+    a.team ? `<span class="flag role" title="Team ${esc(teams.get(a.team.id)?.name ?? '')}: ${esc(a.team.role)}">👥 ${esc(a.team.role)}${a.team.n && teams.get(a.team.id)?.settings.critics > 1 ? ` ${a.team.n}` : ''}</span>` : '',
     a.forkOf ? `<span class="flag" title="Fork of ${esc(a.forkOf.name)}">⑂</span>` : '',
   ].join('');
 }
 
 const TRIAGED = { now: 'sent (AI: urgent)', digest: 'held for the digest', skip: 'dropped by the AI judge' };
-const NEED_ORDER = { prompt: 0, waiting: 1, plan: 1, question: 1, review: 2, stuck: 3, conflict: 4 };
+const NEED_ORDER = { prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, review: 2, stuck: 3, conflict: 4 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
@@ -862,13 +866,18 @@ function needsFor(a, { both = false } = {}) {
   for (const g of a.conflicts ?? []) if (both || g.mergeFirst !== a.id) items.push({ a, kind: 'conflict', key: `conflict:${a.id}:${g.agent.id}`, g });
   return items;
 }
+/** Teams waiting on you (approved, or stuck on a disagreement), shown on the implementer. */
+function teamNeeds() {
+  return [...teams.values()]
+    .filter((t) => ['ready', 'blocked'].includes(t.stage) && agents.has(t.members.find((m) => m.role === 'implementer')?.id))
+    .map((t) => ({ a: agents.get(t.members.find((m) => m.role === 'implementer').id), kind: 'team', key: `team:${t.id}`, t }));
+}
 function inboxItems() {
-  return [...agents.values()]
-    .flatMap((a) => needsFor(a))
+  return [...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds()]
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
+const NEED_LABEL = { team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
 function needCard(it, { inDetail = false } = {}) {
@@ -907,6 +916,11 @@ function needCard(it, { inDetail = false } = {}) {
         ${r.missing.length ? '<button class="small primary" data-ib="review-finish" title="Send the missing items to the agent">Send back to finish</button>' : ''}
         <button class="small ${r.missing.length ? '' : 'primary'}" data-ib="review-accept">Looks good</button>
       </div>`;
+  } else if (it.kind === 'team') {
+    const t = it.t;
+    body = `<p class="need-title">${t.stage === 'ready' ? `✓ The reviewer approved <b>${esc(t.name)}</b>` : `<b>${esc(t.name)}</b> needs a decision: ${esc(t.blocked?.reason ?? '')}`}</p>
+      <p class="hint">${esc(t.intent.split('\n')[0].slice(0, 140))}</p>
+      <div class="need-actions"><button class="small primary" data-ib="team-open" data-team="${t.id}">${t.stage === 'ready' ? 'Review and finalize' : 'Decide'}</button></div>`;
   } else if (it.kind === 'plan') {
     const title = a.planReview.markdown?.match(/^#\s+(.+)$/m)?.[1] ?? 'Implementation plan';
     body = `<p class="need-title">${esc(title)}</p>
@@ -1022,6 +1036,8 @@ async function onNeed(e) {
       const q = key.split(':')[2];
       return act(async () => upsert(await api('POST', `/agents/${id}/answer`, { question: q, text: el.dataset.text })), 'Answer sent');
     }
+    case 'team-open':
+      return openTeam(el.dataset.team);
     case 'plan-open':
       return openPlan(id);
     case 'plan-approve':
@@ -1095,6 +1111,8 @@ $('#detail-body').addEventListener('click', (e) => {
   if (cp) forkAgent(selectedId, Number(cp.dataset.forkCp));
   const race = e.target.closest('[data-race-open]');
   if (race) openRace(race.dataset.raceOpen);
+  const team = e.target.closest('[data-team-open]');
+  if (team) openTeam(team.dataset.teamOpen);
 });
 
 function forkAgent(id, checkpoint) {
@@ -1110,6 +1128,159 @@ function forkAgent(id, checkpoint) {
   }, 'Fork created');
 }
 
+// ------------------------------------------------------------------ teams
+
+const TEAM_STEPS = [['analyze', 'Analyze'], ['discuss', 'Discuss'], ['implement', 'Implement'], ['test', 'Test'], ['review', 'Review'], ['ready', 'Your call'], ['done', 'Done']];
+const STAGE_TEXT = { analyze: 'analyzing', discuss: 'discussing the analysis', implement: 'implementing', test: 'testing', review: 'reviewing', ready: 'approved, waiting for you', finalizing: 'opening the PR', done: 'done', blocked: 'waiting for your decision', stopped: 'stopped' };
+const GOOD = new Set(['ready', 'agree', 'done', 'pass', 'approve']);
+const ROLE_NAME = (m) => `${m.role[0].toUpperCase()}${m.role.slice(1)}${m.n && teams.get(openTeamId)?.settings.critics > 1 ? ` ${m.n}` : ''}`;
+
+function teamBanner(a) {
+  if (!a.team) return '';
+  const t = teams.get(a.team.id);
+  const turn = t?.waiting?.some((w) => w.member === a.id && !w.verdict);
+  return `<div class="bl-banner team">👥 <b>${esc(a.team.role)}</b> on team <b>${esc(t?.name ?? a.team.id)}</b>${t ? ` · ${esc(STAGE_TEXT[t.stage] ?? t.stage)}${t.loop > 1 ? ` · round ${t.loop}` : ''}` : ''}${turn ? ' · <b>its turn</b>' : ''}
+    <span class="spacer"></span><button class="small primary" data-team-open="${a.team.id}">Open team</button></div>`;
+}
+
+function openTeam(id) {
+  openTeamId = id;
+  teamFile = null;
+  renderTeam();
+  if (!$('#team-dialog').open) $('#team-dialog').showModal();
+  act(async () => teams.set(id, await api('GET', `/teams/${id}`)));
+}
+
+function teamSteps(t) {
+  const at = t.stage === 'finalizing' ? 'ready' : t.stage;
+  const idx = TEAM_STEPS.findIndex(([k]) => k === at);
+  const stopped = ['blocked', 'stopped'].includes(t.stage);
+  // Where a blocked or stopped team got to: the last step anyone finished.
+  const reached = stopped ? Math.max(0, ...t.history.map((h) => TEAM_STEPS.findIndex(([k]) => k === h.stage))) : idx;
+  return TEAM_STEPS.filter(([k]) => k !== 'discuss' || t.settings.critics)
+    .map(([k, label]) => {
+      const i = TEAM_STEPS.findIndex(([x]) => x === k);
+      const cls = stopped ? (i < reached ? 'done' : i === reached ? 'stop' : '') : i < idx || t.stage === 'done' ? 'done' : i === idx ? 'now' : '';
+      return `<span class="team-step ${cls}">${label}</span>`;
+    })
+    .join('<span class="team-arrow">→</span>');
+}
+
+function renderTeam() {
+  const dlg = $('#team-dialog');
+  if (!dlg.open && !openTeamId) return;
+  const t = teams.get(openTeamId);
+  if (!t) {
+    $('#team-body').innerHTML = '<p class="hint">Loading…</p>';
+    return;
+  }
+  if ($('#team-body').contains(document.activeElement) && document.activeElement.tagName === 'TEXTAREA') return;
+  $('#team-title').textContent = `Team: ${t.name}`;
+  $('#team-stop').hidden = ['done', 'stopped'].includes(t.stage);
+  const memberOf = (id) => t.members.find((m) => m.id === id);
+  const gate =
+    t.stage === 'ready'
+      ? `<div class="team-gate"><b>✓ The reviewer approved it.</b> Look at the review and the changes, then:
+          <div class="need-actions"><button class="small primary" data-team-act="pr">Open a pull request</button><button class="small" data-team-act="keep">Keep the branch, no PR</button></div>
+          <textarea id="team-note" rows="2" placeholder="Or say what should change; the implementer fixes it and it goes through test and review again"></textarea>
+          <div class="need-actions"><button class="small" data-team-act="send-back">Send back</button></div></div>`
+      : t.stage === 'blocked'
+        ? `<div class="team-gate blocked"><b>${esc(t.blocked.reason)}</b>
+            <textarea id="team-note" rows="2" placeholder="Optional note for the next round"></textarea>
+            <div class="need-actions">
+              ${t.blocked.at !== 'member' ? `<button class="small primary" data-team-act="continue">${t.blocked.at === 'discuss' ? 'One more round' : 'One more fix round'}</button>` : ''}
+              ${t.blocked.at === 'discuss' ? '<button class="small" data-team-act="skip" title="Implement the latest analysis as it is">Implement the latest analysis</button>' : ''}
+              ${t.blocked.at === 'loops' ? '<button class="small" data-team-act="skip" title="Move to your final review without another round">Accept as is</button>' : ''}
+            </div></div>`
+        : '';
+  $('#team-body').innerHTML = `
+    <p>${esc(t.intent)}</p>
+    <div class="team-steps">${teamSteps(t)}</div>
+    <p class="hint">${esc(STAGE_TEXT[t.stage] ?? t.stage)}${t.settings.critics ? ` · analysis round ${t.round}` : ''} · build round ${t.loop}${t.branch ? ` · branch <code>${esc(t.branch)}</code>` : ''}${t.costUsd ? ` · ${fmtCost(t.costUsd)}` : ''}
+      ${t.prs.map((p) => ` · <a href="${esc(p.url)}" target="_blank" rel="noopener">PR #${p.number ?? ''}</a>`).join('')}</p>
+    ${gate}
+    <div class="race-table-wrap"><table class="race-table">
+      <tr><th>Role</th><th>Agent</th><th>Status</th><th>Model</th><th>Cost</th></tr>
+      ${t.members.map((m) => {
+        const a = agents.get(m.id);
+        const st = a ? statusOf(a) : m.status;
+        return `<tr class="${m.turn ? 'diffing' : ''}"><td><b>${ROLE_NAME(m)}</b>${m.turn ? ' <span class="tag open">its turn</span>' : ''}</td>
+          <td>${a ? `<a href="#${m.id}" data-team-goto="${m.id}">${esc(m.name)}</a>` : '<span class="hint">deleted</span>'}</td>
+          <td><span class="pill ${st}">${pillText(st)}</span></td><td>${m.model ? esc(m.model) : '<span class="hint">default</span>'}</td><td>${fmtCost(m.costUsd)}</td></tr>`;
+      }).join('')}
+    </table></div>
+    <h3>Handoffs</h3>
+    ${t.history.length
+      ? `<ul class="team-timeline">${t.history.slice().reverse().map((h) => {
+          const m = memberOf(h.member);
+          return `<li><span><b>${m ? ROLE_NAME(m) : esc(h.role)}</b> <span class="hint">${ago(h.at)}${h.loop > 1 && ['implement', 'test', 'review'].includes(h.stage) ? ` · r${h.loop}` : ''}</span></span>
+            <span><span class="verdict-word ${GOOD.has(h.verdict) ? 'good' : 'bad'}">${esc(h.verdict)}</span></span>
+            <span><a href="#" data-team-file="${esc(h.file)}">${esc(h.file)}</a> <span class="summary">${esc(h.summary)}</span></span></li>`;
+        }).join('')}</ul>`
+      : '<p class="hint">Nothing handed off yet. The analyst is reading the code.</p>'}
+    ${teamFile ? `<div class="need-head"><b>${esc(teamFile.name)}</b><span class="spacer"></span><button class="small ghost" data-team-file-close>Close</button></div><article class="md team-file">${md(teamFile.markdown)}</article>` : ''}`;
+}
+
+$('#team-close').onclick = () => {
+  openTeamId = null;
+  $('#team-dialog').close();
+};
+$('#team-stop').onclick = () => {
+  if (!confirm("Stop the team? Its agents close (you can resume them); nothing is deleted.")) return;
+  act(async () => teams.set(openTeamId, await api('POST', `/teams/${openTeamId}/stop`)), 'Team stopped');
+};
+$('#team-delete').onclick = () => {
+  const id = openTeamId;
+  const all = confirm('Also delete the team\'s agents and its worktree?\n\nOK: delete them too. Cancel: keep the agents, forget only the team.');
+  act(async () => {
+    await api('DELETE', `/teams/${id}${all ? '?agents=1' : ''}`);
+    teams.delete(id);
+    openTeamId = null;
+    $('#team-dialog').close();
+    render();
+  });
+};
+$('#team-body').addEventListener('click', (e) => {
+  const t = e.target;
+  const go = t.closest('[data-team-goto]');
+  if (go) {
+    e.preventDefault();
+    openTeamId = null;
+    $('#team-dialog').close();
+    showTab('agents');
+    return select(go.dataset.teamGoto);
+  }
+  const file = t.closest('[data-team-file]');
+  if (file) {
+    e.preventDefault();
+    return act(async () => {
+      teamFile = await api('GET', `/teams/${openTeamId}/files/${encodeURIComponent(file.dataset.teamFile)}`);
+      renderTeam();
+      $('#team-body .team-file')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  }
+  if (t.closest('[data-team-file-close]')) {
+    teamFile = null;
+    return renderTeam();
+  }
+  const b = t.closest('[data-team-act]');
+  if (!b) return;
+  const note = $('#team-note')?.value.trim() || undefined;
+  const id = openTeamId;
+  const calls = {
+    pr: () => api('POST', `/teams/${id}/finalize`, { pr: true }),
+    keep: () => api('POST', `/teams/${id}/finalize`, { pr: false }),
+    'send-back': () => api('POST', `/teams/${id}/send-back`, { note }),
+    continue: () => api('POST', `/teams/${id}/resume`, { action: 'continue', note }),
+    skip: () => api('POST', `/teams/${id}/resume`, { action: 'skip', note }),
+  };
+  const done = { pr: 'The implementer is opening the PR', keep: 'Done; the branch is kept', 'send-back': 'Sent back to the implementer', continue: 'Another round started', skip: 'Moving on' };
+  act(async () => {
+    teams.set(id, await calls[b.dataset.teamAct]());
+    renderTeam();
+  }, done[b.dataset.teamAct]);
+});
+
 // ------------------------------------------------------------------ races
 
 function raceBanner(a) {
@@ -1124,6 +1295,7 @@ function openRace(id) {
   openRaceId = id;
   raceDiff = null;
   renderRace();
+  renderTeam();
   if (!$('#race-dialog').open) $('#race-dialog').showModal();
   act(async () => races.set(id, await api('GET', `/races/${id}`)));
 }
@@ -1339,6 +1511,7 @@ function renderDetail() {
       : ''}
     ${a.runtime.attention ? `<div class="error-box">${esc(a.runtime.attention)}: the agent is waiting for an answer. Open its terminal to respond.</div>` : ''}
     ${raceBanner(a)}
+    ${teamBanner(a)}
     ${a.forkOf ? `<div class="bl-banner">⑂ Forked from <a href="#${a.forkOf.agentId}" data-goto="${a.forkOf.agentId}">${esc(a.forkOf.name)}</a>${a.forkOf.checkpoint ? ` at checkpoint ${a.forkOf.checkpoint}` : ''} ${ago(a.forkOf.at)}</div>` : ''}
     ${(() => {
       const items = needsFor(a, { both: true });
@@ -1444,6 +1617,7 @@ function render() {
   renderBacklog();
   renderInbox();
   renderRace();
+  renderTeam();
   renderDocDialog();
   renderDetail();
   term.syncOverlay();
@@ -2743,7 +2917,8 @@ function syncWhen() {
   const when = dialog.querySelector('input[name="when"]:checked').value;
   dialog.querySelector('.now-only').hidden = when !== 'now';
   dialog.querySelector('.race-only').hidden = when !== 'race';
-  dialog.querySelector('button[type=submit]').textContent = when === 'backlog' ? 'Add to backlog' : when === 'race' ? 'Start race' : 'Create agents';
+  dialog.querySelector('.team-only').hidden = when !== 'team';
+  dialog.querySelector('button[type=submit]').textContent = { backlog: 'Add to backlog', race: 'Start race', team: 'Start team' }[when] ?? 'Create agents';
 }
 for (const r of dialog.querySelectorAll('input[name="when"]')) r.addEventListener('change', syncWhen);
 $('#new-btn').onclick = () => openNewDialog('now');
@@ -2755,6 +2930,41 @@ $('#new-form').addEventListener('submit', async (e) => {
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean);
+  if (f.get('when') === 'team') {
+    // "analyst=opus reviewer=opus"
+    const models = Object.fromEntries(
+      String(f.get('roleModels') || '')
+        .split(/[\s,]+/)
+        .map((p) => p.split('='))
+        .filter(([k, v]) => k && v),
+    );
+    try {
+      const team = await api('POST', '/teams', {
+        intent: intents.join('\n'),
+        critics: Number(f.get('critics')),
+        testCommand: f.get('teamTest') || undefined,
+        models,
+        repo: f.get('repo') || undefined,
+        dir: f.get('dir') || undefined,
+        base: f.get('base') || undefined,
+        project: f.get('project') || undefined,
+        permissionMode: f.get('permissionMode') || undefined,
+        model: f.get('model') || undefined,
+        engine: f.get('engine') || undefined,
+        priority: Number(f.get('priority')),
+      });
+      teams.set(team.id, team);
+      dialog.close();
+      e.target.reset();
+      syncWhen();
+      openTeam(team.id);
+      toast(`Team started: ${team.members.length} agents`);
+    } catch (err) {
+      $('#new-error').textContent = err.message;
+      $('#new-error').hidden = false;
+    }
+    return;
+  }
   if (f.get('when') === 'race') {
     // "model", "model | approach" or "| approach", one attempt per line.
     const variants = String(f.get('variants') || '')
@@ -2948,6 +3158,8 @@ function handleEvent(msg) {
     if (msg.projects) projectsState = msg.projects;
     races.clear();
     for (const r of msg.races ?? []) races.set(r.id, r);
+    teams.clear();
+    for (const t of msg.teams ?? []) teams.set(t.id, t);
     msg.agents.forEach(watchDocs);
     if (selectedId && !agents.has(selectedId)) selectedId = null;
     if (openTermOnLoad && selectedId) {
@@ -2966,6 +3178,10 @@ function handleEvent(msg) {
     races.set(msg.race.id, msg.race);
   } else if (msg.t === 'race-removed') {
     races.delete(msg.id);
+  } else if (msg.t === 'team') {
+    teams.set(msg.team.id, msg.team);
+  } else if (msg.t === 'team-removed') {
+    teams.delete(msg.id);
   } else if (msg.t === 'backlog') {
     backlogState = msg.backlog;
   } else if (msg.t === 'projects') {

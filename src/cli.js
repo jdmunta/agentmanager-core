@@ -626,6 +626,103 @@ export async function main(argv) {
       console.log(`${green('🏆')} winner: ${r.rows.find((x) => x.id === r.winner)?.variant?.label ?? r.winner}`);
     });
 
+  const teamCmd = program.command('team').description('Agents in roles solve one problem: analyze, critique, implement, test, review');
+  teamCmd
+    .command('start')
+    .description('Start a team on a problem')
+    .argument('<problem>')
+    .option('-r, --repo <url>', 'git repository URL')
+    .option('-d, --dir <path>', 'git folder (the team gets a worktree)')
+    .option('--project <name>', 'project shortcut or name')
+    .option('-b, --base <ref>', 'branch the team starts from')
+    .option('-c, --critics <n>', 'critics who challenge the analysis (0-2)', '1')
+    .option('-t, --test <command>', 'test command, a hint for the tester')
+    .option('-m, --model <model>', 'model for every role')
+    .option('--role-model <role=model...>', 'model for one role, e.g. --role-model analyst=opus reviewer=opus')
+    .option('--max-rounds <n>', 'analysis rounds before it asks you (default 3)')
+    .option('--max-loops <n>', 'fix rounds before it asks you (default 3)')
+    .action(async (problem, opts) => {
+      await daemon();
+      const models = Object.fromEntries((opts.roleModel ?? []).map((p) => p.split('=')).filter(([k, v]) => k && v));
+      const t = await api('POST', '/teams', {
+        intent: problem, repo: opts.repo, dir: opts.dir, project: opts.project, base: opts.base, critics: Number(opts.critics),
+        testCommand: opts.test, model: opts.model, models, maxRounds: opts.maxRounds, maxLoops: opts.maxLoops,
+      });
+      console.log(`${green('👥')} team ${bold(t.id)}: ${t.members.map((m) => `${m.role} (${m.id})`).join(', ')}`);
+      console.log(dim(`  follow it: agentmgr team show ${t.id}`));
+    });
+  teamCmd
+    .command('show')
+    .description('Where a team stands and what each member handed off (or list teams)')
+    .argument('[team]')
+    .action(async (id) => {
+      await daemon();
+      if (!id) {
+        const list = await api('GET', '/teams');
+        if (!list.length) return console.log(dim('No teams yet: agentmgr team start "<problem>" -r <repo>'));
+        return table(list.map((t) => [t.id, t.name, t.stage, `${t.loop}`, t.intent.split('\n')[0].slice(0, 50)]), ['TEAM', 'NAME', 'STAGE', 'ROUND', 'PROBLEM']);
+      }
+      const t = await api('GET', `/teams/${id}`);
+      console.log(`${bold(t.name)}  ${t.stage}${t.blocked ? `: ${t.blocked.reason}` : ''}`);
+      console.log(dim(`  ${t.intent.split('\n')[0]}`));
+      console.log(dim(`  folder ${t.dir}${t.branch ? ` · branch ${t.branch}` : ''}`));
+      table(t.members.map((m) => [m.role + (m.n && t.settings.critics > 1 ? ` ${m.n}` : ''), m.id, m.status, m.turn ? 'its turn' : '', m.costUsd ? `$${m.costUsd.toFixed(2)}` : '']), ['ROLE', 'AGENT', 'STATUS', '', 'COST']);
+      if (t.history.length) {
+        console.log('');
+        table(t.history.map((h) => [h.role, h.verdict, h.file, h.summary.slice(0, 70)]), ['FROM', 'VERDICT', 'FILE', 'SUMMARY']);
+      }
+      if (t.stage === 'ready') console.log(`\n${green('✓')} approved: agentmgr team finalize ${t.id} [--no-pr], or agentmgr team send-back ${t.id} "<what to change>"`);
+      if (t.stage === 'blocked') console.log(`\n${yellow('!')} decide: agentmgr team continue ${t.id} ["note"], or agentmgr team skip ${t.id}`);
+    });
+  teamCmd
+    .command('finalize')
+    .description('Accept the approved work: the implementer opens a PR (or keep the branch with --no-pr)')
+    .argument('<team>')
+    .option('--no-pr', 'keep the branch without a pull request')
+    .action(async (id, opts) => {
+      await daemon();
+      const t = await api('POST', `/teams/${id}/finalize`, { pr: opts.pr });
+      console.log(`${green('✓')} ${t.stage === 'finalizing' ? 'the implementer is opening the pull request' : 'done; the branch is kept'}`);
+    });
+  teamCmd
+    .command('send-back')
+    .description('Send the approved work back with what should change')
+    .argument('<team>')
+    .argument('<note>')
+    .action(async (id, note) => {
+      await daemon();
+      await api('POST', `/teams/${id}/send-back`, { note });
+      console.log(`${green('↩')} sent back to the implementer`);
+    });
+  teamCmd
+    .command('continue')
+    .description('After a disagreement: one more round, with an optional note')
+    .argument('<team>')
+    .argument('[note]')
+    .action(async (id, note) => {
+      await daemon();
+      await api('POST', `/teams/${id}/resume`, { action: 'continue', note });
+      console.log(`${green('…')} another round started`);
+    });
+  teamCmd
+    .command('skip')
+    .description('After a disagreement: implement the latest analysis, or accept the work as is')
+    .argument('<team>')
+    .action(async (id) => {
+      await daemon();
+      const t = await api('POST', `/teams/${id}/resume`, { action: 'skip' });
+      console.log(`${green('→')} ${t.stage === 'ready' ? 'accepted; finalize when ready' : 'implementing the latest analysis'}`);
+    });
+  teamCmd
+    .command('stop')
+    .description("Stop a team: its agents close; nothing is deleted")
+    .argument('<team>')
+    .action(async (id) => {
+      await daemon();
+      await api('POST', `/teams/${id}/stop`);
+      console.log(`${green('■')} team stopped`);
+    });
+
   const projCmd = program.command('project').description('Project shortcuts: short names like "cc" for repos you work on');
   projCmd
     .command('ls')

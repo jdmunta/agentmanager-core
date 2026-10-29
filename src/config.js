@@ -24,6 +24,8 @@ export const paths = {
   scrollback: path.join(HOME, 'scrollback'),
   // Files attached from the UI (dropped or pasted into a terminal), per agent.
   uploads: path.join(HOME, 'uploads'),
+  // Agent teams' handoff files (analysis, critiques, test reports, reviews), per team.
+  teams: path.join(HOME, 'teams'),
 };
 
 const DEFAULTS = {

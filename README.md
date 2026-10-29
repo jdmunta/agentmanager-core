@@ -53,6 +53,7 @@ New in 0.2, for running many agents at once:
 - **Stuck detection.** Spots an agent going in circles (the same failure again and again, undoing its own edits, a long stretch with no file changed) and offers a ready-made nudge to send.
 - **AI judge.** Rules only decide *when* to look; a fast model decides *what is going on*: whether a stuck-looking agent is really stuck (and a nudge specific to its problem), what an idle agent is asking when no known prompt matched, whether "done" work actually meets the intent, whether two agents' work will collide, what the backlog should start next, and which alerts are worth interrupting you for. It learns from how you react.
 - **Checkpoints and forks.** The code (uncommitted work included) and the conversation are saved at the end of every turn. **Fork** starts a new agent from now or from any checkpoint, in its own worktree, to try another direction without losing the first.
+- **Teams.** Give one problem to a team of agents in roles: an analyst writes the analysis, critics challenge it until they agree, then an implementer builds it, a tester tests it and a reviewer approves it or sends it back. You step in at the end, or when they can't agree.
 - **Races.** Send one intent to several agents with different models or approaches. Compare their outcome, checks, size of change, cost and a test command run in each worktree, read their diffs side by side, then pick a winner and delete the rest.
 
 ## When to use it
@@ -171,6 +172,8 @@ agentmgr answer <agent> <question-id> "…"     # answer a question from the inb
 agentmgr tell <agent> "…"                     # send a message into the session (when it's idle)
 agentmgr fork <agent> [-c 3] [-m "…"]         # new agent from now (or checkpoint 3), its own worktree
 agentmgr checkpoints <agent>                  # snapshots saved at the end of each turn
+agentmgr team start "problem" -r <repo> [-c 2] [-t "npm test"] [--role-model reviewer=opus]
+agentmgr team show [team] | finalize <team> [--no-pr] | send-back <team> "…" | continue <team> ["note"] | skip <team> | stop <team>
 agentmgr race start "intent" -v opus -v "sonnet|keep it small" -r <repo> -t "npm test"
 agentmgr race show [race] | test <race> | pick <race> <agent> [--cleanup]
 agentmgr flush                                # save session IDs, scrollback, usage and state now
@@ -537,6 +540,29 @@ At the end of each turn, AI Agent Manager snapshots the agent's working tree as 
 
 The source agent keeps running untouched.
 
+## Teams
+
+**+ New agents → Team** (or `agentmgr team start`) gives one problem to a team of agents, each a normal agent with its own terminal:
+
+```
+ Analyze ──► Discuss ──► Implement ──► Test ──► Review ──► you: PR, keep, or send back
+ analyst     critics      implementer   tester   reviewer
+             agree / changes / questions  ▲  fail   │ changes
+             (up to 3 rounds)             └─────────┴─ (up to 3 rounds)
+```
+
+- **Analyst** studies the problem and the code and writes the analysis: findings, approach, files, risks, how to test. It doesn't change code.
+- **Critics** (0–2, default 1) challenge the analysis, marking points *must*, *should* or *question*. The analyst answers every point, changing the analysis or saying why not, until the critics agree.
+- **Implementer** builds the agreed analysis and commits on the team's branch.
+- **Tester** runs the tests and tries the change; it may add tests, but failures go back to the implementer.
+- **Reviewer** reviews the diff against the analysis and the test report, and approves it or sends it back.
+
+The agents hand off through Markdown files in the team's folder (`~/.agentmanager/teams/<id>/`: `analysis-1.md`, `critique-1-1.md`, `test-1.md`, `review-1.md`, …), each ending with a `verdict:` line. AI Agent Manager reads the verdict and tells the next agent what to read, so no agent waits on another, and you can read every handoff in the team view. Only one agent works at a time, and all of them share one worktree and branch.
+
+**You step in only at the end:** when the reviewer approves, the team shows up in your inbox. **Open a pull request** (the implementer pushes and opens it), **Keep the branch**, or **Send back** with what to change (it goes through test and review again). If the analyst and the critics don't agree within 3 rounds, or the tester and reviewer still send the work back after 3, the team stops and asks you: one more round (with a note), or move on.
+
+**Cost:** a team is up to six sessions on one problem, so expect several times the tokens of a single agent. Pick the model per role, for example a stronger model for the analyst and the reviewer: `analyst=opus reviewer=opus` in the form, or `--role-model` on the command line. Defaults go in config.json under `teams`: `critics`, `maxRounds`, `maxLoops`, `models`, `engines` (a critic or reviewer on another engine sees different things).
+
 ## Races
 
 **+ New agents → Race variants** (or `agentmgr race start`) creates one agent per variant. Each runs in its own worktree. A variant is a model, an approach, or both: `opus`, `sonnet | keep the change minimal`, `| use a cache`. **Compare** opens the scoreboard:
@@ -746,6 +772,7 @@ State lives in `~/.agentmanager/` (`state.json`, `daemon.log`, `repos/` for shar
   "inbox": true,
   "maxCheckpoints": 40,
   "raceTestTimeoutSec": 900,
+  "teams": { "critics": 1, "maxRounds": 3, "maxLoops": 3, "models": { "analyst": "opus", "reviewer": "opus" } },
   "conflictRefreshSec": 60,
   "stuck": { "repeatFailures": 3, "thrashReverts": 2, "thrashEdits": 10, "driftMinutes": 20, "driftActions": 25 },
   "judge": { "enabled": true, "model": "haiku", "dailyCalls": 300 },

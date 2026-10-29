@@ -10,6 +10,7 @@ import { ensureHome, HOST, loadConfig, paths, PORT, saveConfig } from './config.
 import { AgentManager, shellNumber } from './manager.js';
 import { Backlog } from './backlog.js';
 import { Races } from './races.js';
+import { Teams } from './teams.js';
 import { listEngines, registerEngine } from './engines/index.js';
 import { Plugins, pluginSpecs } from './plugins.js';
 import { HubLink, linkUrls } from './hublink.js';
@@ -55,9 +56,11 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const manager = new AgentManager({ store, config, plugins });
   const backlog = new Backlog({ manager, store, config });
   const races = new Races({ manager, store });
+  const teams = new Teams({ manager, store, config });
   // Alerts link to the phone address when remote access is on, else the local UI.
   const notifier = new Notifier({
     manager,
+    teams,
     backlog,
     linkFor: (id) => {
       const phone = remoteServer ? remote.remoteUrls(remotePort).find((u) => !u.vpn) : null;
@@ -398,6 +401,16 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/races/:id/pick', wrap((req) => races.pick(req.params.id, req.body?.agent, { cleanup: Boolean(req.body?.cleanup) })));
   api.delete('/races/:id', wrap((req) => races.remove(req.params.id)));
 
+  api.get('/teams', wrap(() => teams.list()));
+  api.post('/teams', wrap((req) => teams.create(req.body ?? {})));
+  api.get('/teams/:id', wrap((req) => teams.view(req.params.id)));
+  api.get('/teams/:id/files/:name', wrap((req) => teams.file(req.params.id, req.params.name)));
+  api.post('/teams/:id/resume', wrap((req) => teams.resume(req.params.id, req.body ?? {})));
+  api.post('/teams/:id/send-back', wrap((req) => teams.sendBack(req.params.id, req.body?.note)));
+  api.post('/teams/:id/finalize', wrap((req) => teams.finalize(req.params.id, { pr: req.body?.pr !== false })));
+  api.post('/teams/:id/stop', wrap((req) => teams.stop(req.params.id)));
+  api.delete('/teams/:id', wrap((req) => teams.remove(req.params.id, { agents: req.query.agents === '1' })));
+
   api.post('/backlog/settings', wrap((req) => backlog.settings(req.body ?? {})));
   api.patch('/backlog/:id', wrap((req) => backlog.update(req.params.id, req.body ?? {})));
   api.delete('/backlog/:id', wrap((req) => backlog.remove(req.params.id)));
@@ -523,7 +536,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const eventSinks = new Set();
   api.get('/events/stream', (req, res) => {
     const send = sse(req, res);
-    send({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list() });
+    send({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list() });
     eventSinks.add(send);
     req.on('close', () => eventSinks.delete(send));
   });
@@ -629,6 +642,17 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     }, 300));
   });
   races.on('removed', (id) => broadcast({ t: 'race-removed', id }));
+  const teamTimers = new Map();
+  teams.on('change', (id) => {
+    if (teamTimers.has(id)) return;
+    teamTimers.set(id, setTimeout(() => {
+      teamTimers.delete(id);
+      try {
+        broadcast({ t: 'team', team: teams.view(id) });
+      } catch {}
+    }, 300));
+  });
+  teams.on('removed', (id) => broadcast({ t: 'team-removed', id }));
   manager.on('projects', (projects) => {
     broadcast({ t: 'projects', projects });
     broadcast({ t: 'backlog', backlog: backlog.view() });
@@ -638,7 +662,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     const url = new URL(req.url, 'http://x');
     if (url.pathname === '/ws/events') {
       eventClients.add(ws);
-      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list() }));
+      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list() }));
       ws.on('close', () => eventClients.delete(ws));
       return;
     }
@@ -750,6 +774,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     hubLink,
     server,
     manager,
+    teams,
     backlog,
     live,
     url: `http://${host}:${port}`,

@@ -22,7 +22,8 @@ export default {
     const args = [];
     if (permissionMode && permissionMode !== 'default') args.push('--permission-mode', permissionMode);
     if (model) args.push('--model', model);
-    if (writableDir) args.push('--add-dir', writableDir, '--allowedTools', `Write(/${writableDir}/**)`, `Edit(/${writableDir}/**)`);
+    const dirs = [writableDir ?? []].flat();
+    if (dirs.length) args.push('--add-dir', ...dirs, '--allowedTools', ...dirs.flatMap((d) => [`Write(/${d}/**)`, `Edit(/${d}/**)`]));
     if (instructions) args.push('--append-system-prompt', instructions);
     return args;
   },

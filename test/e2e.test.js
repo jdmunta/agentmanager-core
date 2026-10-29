@@ -1687,6 +1687,113 @@ test('races: variants, scoreboard, tests in each worktree, diff, pick a winner a
   await call('DELETE', `/agents/${p.id}?deleteWorkspace=1`);
 });
 
+test('teams: analyst and critic align, implementer, tester and reviewer loop, you finalize at the end', async () => {
+  const origin = makeOrigin('team');
+  assert.equal((await call('POST', '/teams', { intent: 'Fix it' })).status, 400, 'needs a repo');
+  assert.equal((await call('POST', '/teams', { intent: 'Fix it', repo: `file://${origin}`, critics: 3 })).status, 400);
+  const team = (await call('POST', '/teams', { intent: 'Make login survive token rotation', repo: `file://${origin}`, critics: 1, maxRounds: 2, maxLoops: 1, testCommand: 'npm test', models: { reviewer: 'opus' } })).body;
+  assert.deepEqual(team.members.map((m) => m.role), ['analyst', 'critic', 'implementer', 'tester', 'reviewer']);
+  const id = (role) => team.members.find((m) => m.role === role).id;
+  const teamNow = async () => (await call('GET', `/teams/${team.id}`)).body;
+  const stage = (want, round, loop) => waitFor(async () => {
+    const t = await teamNow();
+    return t.stage === want && (round == null || t.round === round) && (loop == null || t.loop === loop) ? t : null;
+  }, 20000, `team ${want}${round ? ` round ${round}` : ''}${loop ? ` loop ${loop}` : ''}`);
+  // An agent finishing a step: its file, settled (older than the poll's wait).
+  const hand = (file, text) => {
+    const f = path.join(team.dir, file);
+    fs.writeFileSync(f, text);
+    const past = new Date(Date.now() - 5000);
+    fs.utimesSync(f, past, past);
+  };
+  const launchOf = (aid) => waitFor(async () => {
+    const a = await agentNow(aid);
+    return launches().find((l) => l.args.includes(a.sessionId));
+  }, 20000, `launch of ${aid}`);
+
+  // Only the analyst starts, with the problem and its first step; it may write in the team folder.
+  const analyst = await runningAgent(id('analyst'));
+  const first = await launchOf(analyst.id);
+  const prompt = first.args[first.args.indexOf('--') + 1];
+  assert.match(prompt, /Problem to solve:\nMake login survive token rotation/);
+  assert.match(prompt, /analysis-1\.md/);
+  assert.ok(first.args.includes(fs.realpathSync(team.dir)), 'team folder is writable');
+  assert.match(first.args[first.args.indexOf('--append-system-prompt') + 1], /You are the analyst on a team/);
+  assert.equal((await agentNow(id('implementer'))).status, 'stopped', 'the others wait their turn');
+  // Everyone works in the implementer's worktree.
+  const owner = await agentNow(id('implementer'));
+  assert.ok(owner.branch?.startsWith('agent/'));
+  assert.equal(analyst.workdir, owner.workdir);
+  assert.equal(analyst.sharedWith, owner.id);
+
+  // Round 1: the critic asks for changes; round 2: it agrees.
+  hand('analysis-1.md', '# Analysis\nThe refresh token is dropped on rotation.\n\nverdict: ready\n');
+  await stage('discuss', 1);
+  assert.ok(manager.idleExpected(analyst.id), 'the judge leaves a member alone between turns');
+  assert.ok(!manager.idleExpected(id('critic')), "but not on its turn");
+  const critic = await launchOf(id('critic'));
+  assert.match(critic.args[critic.args.indexOf('--') + 1], /analysis-1\.md[\s\S]*critique-1-1\.md/);
+  hand('critique-1-1.md', '1. [must] Cover the logout path.\n\n**Verdict:** changes\n');
+  await stage('analyze', 2);
+  hand('analysis-2.md', '# Analysis v2\nAlso logout.\nverdict: ready\n');
+  await stage('discuss', 2);
+  hand('critique-2-1.md', 'All points addressed.\nverdict: agree\n');
+
+  // Implement; the tester fails it; one loop allowed, so the team stops for you.
+  await stage('implement', null, 1);
+  assert.match(fs.readFileSync(path.join(team.dir, 'analysis.md'), 'utf8'), /Analysis v2/, 'the agreed analysis');
+  const impl = await launchOf(id('implementer'));
+  assert.match(impl.args[impl.args.indexOf('--') + 1], /analysis\.md[\s\S]*implementation-1\.md/);
+  hand('implementation-1.md', 'Changed auth/session.go.\nverdict: done\n');
+  await stage('test', null, 1);
+  const tester = await launchOf(id('tester'));
+  assert.match(tester.args[tester.args.indexOf('--') + 1], /npm test/);
+  hand('test-1.md', 'npm test: 2 failures.\nverdict: failed\n');
+  const blocked = await stage('blocked');
+  assert.equal(blocked.blocked.at, 'loops');
+  assert.match(blocked.blocked.reason, /tester still sends the work back/);
+  assert.equal((await call('POST', `/teams/${team.id}/finalize`, {})).status, 409, 'nothing approved yet');
+
+  // You give it one more loop with a note; then test passes and the reviewer approves.
+  await call('POST', `/teams/${team.id}/resume`, { action: 'continue', note: 'Use the existing retry helper' });
+  await stage('implement', null, 2);
+  hand('implementation-2.md', 'Fixed both failures.\nverdict: done\n');
+  await stage('test', null, 2);
+  hand('test-2.md', 'All green.\nverdict: pass\n');
+  await stage('review', null, 2);
+  const reviewer = await launchOf(id('reviewer'));
+  assert.ok(reviewer.args.includes('opus'), 'per-role model');
+  assert.match(reviewer.args[reviewer.args.indexOf('--') + 1], /git diff [0-9a-f]{7,}\.\.\.HEAD[\s\S]*test-2\.md/);
+  hand('review-2.md', 'Looks right.\nverdict: approve\n');
+  const ready = await stage('ready');
+  assert.deepEqual(ready.history.map((h) => `${h.role}:${h.verdict}`), ['analyst:ready', 'critic:changes', 'analyst:ready', 'critic:agree', 'implementer:done', 'tester:fail', 'implementer:done', 'tester:pass', 'reviewer:approve']);
+  assert.equal(ready.history[1].summary, '1. [must] Cover the logout path.');
+  assert.match((await call('GET', `/teams/${team.id}/files/review-2.md`)).body.markdown, /Looks right/);
+  assert.equal((await call('GET', `/teams/${team.id}/files/..%2Fstate.json`)).status, 400);
+
+  // Send it back from the end, then keep the branch without a PR.
+  assert.equal((await call('POST', `/teams/${team.id}/send-back`, { note: ' ' })).status, 400);
+  await call('POST', `/teams/${team.id}/send-back`, { note: 'Rename the helper' });
+  await stage('implement', null, 3);
+  hand('implementation-3.md', 'Renamed.\nverdict: done\n');
+  hand('test-3.md', 'Green.\nverdict: pass\n');
+  await stage('review', null, 3);
+  hand('review-3.md', 'Good.\nverdict: approve\n');
+  await stage('ready');
+  const done = (await call('POST', `/teams/${team.id}/finalize`, { pr: false })).body;
+  assert.equal(done.stage, 'done');
+  assert.equal(done.outcome, 'kept');
+
+  // Deleting a member alone keeps the shared worktree; deleting the team with its agents removes it.
+  const del = (await call('DELETE', `/agents/${id('tester')}?deleteWorkspace=1`)).body;
+  assert.match(del.warnings[0], /belongs to/);
+  assert.ok(fs.existsSync(owner.workdir));
+  await call('DELETE', `/teams/${team.id}?agents=1`);
+  assert.equal((await call('GET', `/agents/${id('implementer')}`)).status, 404);
+  assert.ok(!fs.existsSync(owner.workdir), 'worktree removed');
+  assert.ok(!fs.existsSync(team.dir), 'team folder removed');
+});
+
 test('hub: invite, join, fleet view, signed reconnects, forged runners refused, remove, leave', async () => {
   const { startHub } = await import('../src/hub.js');
   const hubHome = path.join(home, 'hub');
