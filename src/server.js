@@ -11,6 +11,7 @@ import { AgentManager, shellNumber } from './manager.js';
 import { Backlog } from './backlog.js';
 import { Races } from './races.js';
 import { Teams } from './teams.js';
+import { Cleanup } from './cleanup.js';
 import { listEngines, registerEngine } from './engines/index.js';
 import { Plugins, pluginSpecs } from './plugins.js';
 import { HubLink, linkUrls } from './hublink.js';
@@ -57,6 +58,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const backlog = new Backlog({ manager, store, config });
   const races = new Races({ manager, store });
   const teams = new Teams({ manager, store, config });
+  const cleanup = new Cleanup({ manager, store, config, teams });
   // Alerts link to the phone address when remote access is on, else the local UI.
   const notifier = new Notifier({
     manager,
@@ -401,6 +403,17 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/races/:id/pick', wrap((req) => races.pick(req.params.id, req.body?.agent, { cleanup: Boolean(req.body?.cleanup) })));
   api.delete('/races/:id', wrap((req) => races.remove(req.params.id)));
 
+  // Clean up old agents: the strategy and days (kept in config.json), what a run would do, run now.
+  api.get('/cleanup', wrap(() => cleanup.status()));
+  api.put('/cleanup', wrap(async (req) => {
+    const next = cleanup.update(req.body ?? {});
+    saveConfig({ cleanup: next });
+    return cleanup.status();
+  }));
+  api.post('/cleanup/run', wrap(async (req) => {
+    const b = req.body ?? {};
+    return cleanup.run({ close: b.close !== false, delete: b.delete !== false, ids: Array.isArray(b.ids) ? b.ids : null });
+  }));
   api.get('/teams', wrap(() => teams.list()));
   api.post('/teams', wrap((req) => teams.create(req.body ?? {})));
   api.get('/teams/:id', wrap((req) => teams.view(req.params.id)));
@@ -742,6 +755,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   async function shutdown(reason) {
     if (closing) return;
     closing = true;
+    cleanup.close();
     console.log(`[agentmgr] shutting down (${reason}); closing agents so their sessions are saved`);
     await manager.stopAll({ final: true });
     await manager.flush().catch((err) => console.error(`[agentmgr] final flush failed: ${err.message}`));
@@ -777,6 +791,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     server,
     manager,
     teams,
+    cleanup,
     backlog,
     live,
     url: `http://${host}:${port}`,

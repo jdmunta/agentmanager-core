@@ -1969,6 +1969,75 @@ test('teams, one lead session: the roles are its sub-agents; it stays and takes 
   assert.ok(!fs.existsSync(lead.workdir));
 });
 
+test('clean up: closes idle agents, deletes long-closed ones, keeps Keep and unsaved work', async () => {
+  const repo = path.join(home, 'cleanup-repo');
+  fs.mkdirSync(repo);
+  const g = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd }).toString().trim();
+  g(repo, 'init', '-q', '-b', 'main');
+  g(repo, 'commit', '-q', '--allow-empty', '-m', 'init');
+  const [a, b, c] = (await call('POST', '/agents', { intents: ['Old work', 'Kept work', 'Unsaved work'], dir: repo })).body;
+  for (const x of [a, b, c]) await runningAgent(x.id);
+  // A month without activity for these three.
+  const old = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const realActiveAt = manager.activeAt;
+  manager.activeAt = (agent, rt) => ([a.id, b.id, c.id].includes(agent.id) ? old : realActiveAt.call(manager, agent, rt));
+  try {
+    assert.equal((await call('PUT', '/cleanup', { strategy: 'sometimes' })).status, 400);
+    assert.equal((await call('PUT', '/cleanup', { closeAfterDays: 0 })).status, 400);
+    const saved = (await call('PUT', '/cleanup', { strategy: 'manual', closeAfterDays: 10, deleteAfterDays: 7 })).body;
+    assert.equal(saved.strategy, 'manual');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).cleanup, { strategy: 'manual', closeAfterDays: 10, deleteAfterDays: 7 });
+    await call('PATCH', `/agents/${b.id}`, { keep: true });
+
+    // Agents still working are left alone; these finish their first turn.
+    let plan = await waitFor(async () => {
+      const p = (await call('GET', '/cleanup')).body;
+      return p.close.length === 2 ? p : null;
+    }, 20000, 'idle agents due to close');
+    assert.deepEqual(plan.close.map((x) => x.id).sort(), [a.id, c.id].sort());
+    assert.equal(plan.close[0].idleDays, 30);
+    assert.deepEqual(plan.kept.filter((x) => x.id === b.id).map((x) => x.reason), ['marked Keep']);
+
+    // Close only: the sessions end, the agents stay.
+    const closed = (await call('POST', '/cleanup/run', { delete: false })).body;
+    assert.deepEqual(closed.closed.map((x) => x.id).sort(), [a.id, c.id].sort());
+    assert.deepEqual(closed.deleted, []);
+    const ca = await agentNow(a.id);
+    assert.equal(ca.runtime.running, false);
+    assert.equal(ca.closedBy, 'cleanup');
+    assert.equal((await agentNow(b.id)).runtime.running, true, 'Keep');
+
+    // Closed for three weeks: due to delete, unless its worktree holds work found nowhere else.
+    const longAgo = new Date(Date.now() - 21 * 86_400_000).toISOString();
+    for (const id of [a.id, c.id]) manager.patch(id, { closedAt: longAgo });
+    const cw = (await agentNow(c.id)).workdir;
+    fs.writeFileSync(path.join(cw, 'notes.txt'), 'draft');
+    plan = (await call('GET', '/cleanup')).body;
+    assert.deepEqual(plan.delete.map((x) => x.id), [a.id]);
+    assert.equal(plan.delete[0].closedDays, 21);
+    assert.equal(plan.kept.find((x) => x.id === c.id).reason, 'uncommitted changes');
+    g(cw, 'add', '.');
+    g(cw, 'commit', '-q', '-m', 'Notes');
+    assert.equal((await call('GET', '/cleanup')).body.kept.find((x) => x.id === c.id).reason, '1 commit not pushed or merged');
+
+    const aw = ca.workdir;
+    const run = (await call('POST', '/cleanup/run', {})).body;
+    assert.deepEqual(run.deleted.map((x) => x.id), [a.id]);
+    assert.equal((await call('GET', `/agents/${a.id}`)).status, 404);
+    assert.ok(!fs.existsSync(aw), 'its worktree is gone');
+    assert.ok(fs.existsSync(path.join(cw, 'notes.txt')), 'unsaved work stays');
+    assert.equal((await call('GET', '/cleanup')).body.lastRun.deleted.length, 1);
+
+    // Once its commits are merged into main, it may go too.
+    g(repo, 'merge', '-q', '--ff-only', (await agentNow(c.id)).git.branch);
+    assert.deepEqual((await call('GET', '/cleanup')).body.delete.map((x) => x.id), [c.id]);
+  } finally {
+    manager.activeAt = realActiveAt;
+    await call('PUT', '/cleanup', { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14 });
+    for (const x of [b, c]) await call('DELETE', `/agents/${x.id}?deleteWorkspace=1`);
+  }
+});
+
 test('hub: invite, join, fleet view, signed reconnects, forged runners refused, remove, leave', async () => {
   const { startHub } = await import('../src/hub.js');
   const hubHome = path.join(home, 'hub');

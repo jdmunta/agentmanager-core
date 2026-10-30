@@ -11,6 +11,7 @@ import { passEnv, plist, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
+import { cleanupSettings } from '../src/cleanup.js';
 import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-unit-'));
@@ -711,4 +712,10 @@ test('team lead: sub-agents per role, and the steps it runs', () => {
   assert.match(gp, /fewer than 2 gap rounds have run for this request, start the next one yourself, without asking/);
   assert.doesNotMatch(gp, /Ask the person before each gap round/);
   assert.deepEqual(claude.optionArgs({ agents: { a: { description: 'd', prompt: 'p' } } }), ['--agents', '{"a":{"description":"d","prompt":"p"}}']);
+});
+
+test('clean up settings: defaults and bounds', () => {
+  assert.deepEqual(cleanupSettings({}), { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14 });
+  assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'close-delete', closeAfterDays: '7' } }), { strategy: 'close-delete', closeAfterDays: 7, deleteAfterDays: 14 });
+  assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'nuke', closeAfterDays: 0, deleteAfterDays: -3 } }), { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14 });
 });

@@ -377,6 +377,10 @@ body.remote .local-only { display: none; }
 .alerts-body .check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .alerts-body .check input[type=checkbox] { width: auto; }
 .alerts-body .num { width: 64px; padding: 2px 6px; }
+.cleanup-plan { font-size: 13px; max-height: 260px; overflow: auto; }
+.cleanup-plan h4 { margin: 8px 0 4px; font-size: 13px; }
+.cleanup-plan ul { margin: 0; padding-left: 18px; }
+.cleanup-plan li .hint { margin-left: 6px; }
 #login-form { padding: 20px; display: grid; gap: 12px; }
 #login-form h2 { margin: 0; font-size: 17px; }
 

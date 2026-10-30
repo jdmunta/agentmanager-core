@@ -1052,7 +1052,8 @@ export class AgentManager extends EventEmitter {
   stop(ref, { timeoutMs = 5000, keepDesired = false } = {}) {
     const agent = this.mustGet(ref);
     if (this.runtimes.get(agent.id)?.pty) this.plugins.emit('agent.stopping', { agent: this.auditView(agent) });
-    if (!keepDesired && agent.desired !== 'stopped') this.patch(agent.id, { desired: 'stopped' });
+    // When it was closed (not a daemon shutdown): clean up counts from here.
+    if (!keepDesired) this.patch(agent.id, { desired: 'stopped', closedAt: now(), closedBy: null });
     const rt = this.runtimes.get(agent.id);
     if (!rt?.pty) return Promise.resolve(this.view(agent));
     rt.stopping = true;
@@ -1188,6 +1189,8 @@ export class AgentManager extends EventEmitter {
     const agent = this.mustGet(ref);
     const allowed = {};
     for (const key of ['name', 'notes', 'permissionMode', 'model', 'project']) if (key in fields) allowed[key] = fields[key];
+    // Keep: clean up never closes or deletes it.
+    if ('keep' in fields) allowed.keep = Boolean(fields.keep);
     if ('priority' in fields) {
       const p = parsePriority(fields.priority, null);
       if (p === null) throw Object.assign(new Error('priority must be P0, P1, P2 or P3'), { status: 400 });
