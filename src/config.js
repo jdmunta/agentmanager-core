@@ -67,6 +67,8 @@ const DEFAULTS = {
   handoffIdleSec: 5,
   // The AI judge (stuck, idle screens, reviews); see JUDGE_DEFAULTS in judge.js for every field.
   judge: { enabled: true },
+  // Clean up old agents: "close-delete", "close" (delete by hand), "manual" or "off"; see cleanup.js.
+  cleanup: { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14 },
   // Shell used for the ancillary terminal in an agent's folder.
   shell: process.env.SHELL || '/bin/zsh',
 };

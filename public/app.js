@@ -1535,6 +1535,7 @@ function renderDetail() {
         <button data-act="shell" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="A separate terminal in this agent's folder for running commands by hand">Open shell</button>
         <button data-act="fork" ${a.workdir && a.git?.branch ? '' : 'disabled'} title="A new agent with this one's code and conversation, in its own worktree, to try another approach">Fork</button>
         <button data-act="refresh" title="Re-scan git, PRs and transcripts">Refresh</button>
+        <button data-act="keep" class="${a.keep ? 'on' : ''}" title="${a.keep ? 'Kept: clean up never closes or deletes it. Click to let clean up handle it again' : 'Clean up never closes or deletes an agent marked Keep'}">${a.keep ? '📌 Kept' : 'Keep'}</button>
         <button class="danger" data-act="delete">Delete</button>
       </div>
     </div>
@@ -1545,6 +1546,7 @@ function renderDetail() {
         ${it.status === 'review' ? `<span class="spacer"></span><button class="small primary" data-backlog-accept="${it.id}">Accept</button> <button class="small" data-backlog-reopen="${it.id}">Reopen</button>` : ''}</div>`;
     })()}
     ${a.error ? `<div class="error-box">${esc(a.error)}</div>` : ''}
+    ${!running && a.closedBy === 'cleanup' ? `<p class="hint">Closed by clean up ${ago(a.closedAt)}, after a while with no activity. Resume it any time${a.keep ? '' : ', or mark it Keep'}.</p>` : ''}
     ${a.status === 'preparing'
       ? `<div class="progress-box">
           <div>${esc(progressText(a.progress) || 'Preparing workspace…')}</div>
@@ -2901,6 +2903,9 @@ $('#detail-body').addEventListener('click', async (e) => {
     case 'refresh':
       act(async () => upsert(await api('POST', `/agents/${a.id}/refresh`)), 'Refreshed');
       break;
+    case 'keep':
+      act(async () => upsert(await api('PATCH', `/agents/${a.id}`, { keep: !a.keep })), a.keep ? 'Clean up may close or delete it again' : 'Kept: clean up leaves it alone');
+      break;
     case 'delete': {
       const cancelNote = a.status === 'preparing' ? '\n\nThis also cancels the workspace setup (clone / checkout) in progress.' : '';
       if (!confirm(`Delete agent "${a.name}"? Its session IDs will be forgotten by AI Agent Manager.${cancelNote}`)) return;
@@ -3380,6 +3385,73 @@ $('#remote-content').addEventListener('click', async (e) => {
     await act(() => api('DELETE', `/remote/devices/${btn.dataset.revoke}`), 'Device signed out');
   }
   renderRemote();
+});
+
+// ------------------------------------------------------------------ clean up old agents
+
+const CLEANUP_TEXT = {
+  'close-delete': 'Checked every few hours: idle agents are closed, and closed ones deleted, on their own.',
+  close: 'Checked every few hours: idle agents are closed on their own. Deleting waits for you.',
+  manual: 'Nothing happens on its own. Use the buttons below when you want to clean up.',
+  off: 'Nothing happens on its own.',
+};
+
+async function loadCleanup() {
+  const c = await api('GET', '/cleanup');
+  const f = $('#cleanup-form');
+  f.strategy.value = c.strategy;
+  f.closeAfterDays.value = c.closeAfterDays;
+  f.deleteAfterDays.value = c.deleteAfterDays;
+  const list = (rows, age) => `<ul>${rows.map((x) => `<li><a href="#${x.id}" data-cleanup-goto="${x.id}">${esc(x.name)}</a><span class="hint">${age(x)}${x.reason ? ` · ${esc(x.reason)}` : ''}</span></li>`).join('')}</ul>`;
+  $('#cleanup-plan').innerHTML = `<p class="hint" id="cleanup-what">${CLEANUP_TEXT[c.strategy]}</p>
+    ${c.close.length ? `<h4>Due to close (${c.close.length})</h4>${list(c.close, (x) => `idle ${x.idleDays} days`)}` : ''}
+    ${c.delete.length ? `<h4>Due to delete (${c.delete.length})</h4>${list(c.delete, (x) => `closed ${x.closedDays} days`)}` : ''}
+    ${c.kept.length ? `<h4>Old, but left alone (${c.kept.length})</h4>${list(c.kept, (x) => (x.closedDays != null ? `closed ${x.closedDays} days` : `idle ${x.idleDays} days`))}` : ''}
+    ${!c.close.length && !c.delete.length && !c.kept.length ? '<p>Nothing is due.</p>' : ''}
+    ${c.lastRun ? `<p class="hint">Last run ${ago(c.lastRun.at)} (${c.lastRun.by === 'schedule' ? 'on its own' : 'by you'}): closed ${c.lastRun.closed.length}, deleted ${c.lastRun.deleted.length}${c.lastRun.failed?.length ? `, ${c.lastRun.failed.length} failed` : ''}.</p>` : ''}`;
+  $('#cleanup-run-close').disabled = !c.close.length;
+  $('#cleanup-run').disabled = !c.close.length && !c.delete.length;
+  $('#cleanup-error').hidden = true;
+  return c;
+}
+
+$('#cleanup-btn').onclick = async () => {
+  $('#cleanup-dialog').showModal();
+  await loadCleanup().catch((err) => toast(err.message));
+};
+$('#cleanup-close').onclick = () => $('#cleanup-dialog').close();
+$('#cleanup-form').strategy.addEventListener('change', (e) => {
+  if ($('#cleanup-what')) $('#cleanup-what').textContent = `${CLEANUP_TEXT[e.target.value]} (Save to apply.)`;
+});
+$('#cleanup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api('PUT', '/cleanup', { strategy: f.strategy.value, closeAfterDays: Number(f.closeAfterDays.value), deleteAfterDays: Number(f.deleteAfterDays.value) });
+    toast('Clean up settings saved');
+    await loadCleanup();
+  } catch (err) {
+    $('#cleanup-error').textContent = err.message;
+    $('#cleanup-error').hidden = false;
+  }
+});
+async function runCleanup(del) {
+  const c = await loadCleanup();
+  const n = c.close.length + (del ? c.delete.length : 0);
+  if (!n) return;
+  if (del && c.delete.length && !confirm(`Delete ${c.delete.length} agent${c.delete.length > 1 ? 's' : ''} and their worktrees${c.close.length ? `, and close ${c.close.length}` : ''}?\n\n${c.delete.map((x) => x.name).join('\n')}`)) return;
+  const r = await api('POST', '/cleanup/run', { delete: del });
+  toast(`Closed ${r.closed.length}, deleted ${r.deleted.length}${r.failed.length ? `; ${r.failed.length} failed: ${r.failed[0].reason}` : ''}`);
+  await loadCleanup();
+}
+$('#cleanup-run-close').onclick = () => runCleanup(false).catch((err) => toast(err.message));
+$('#cleanup-run').onclick = () => runCleanup(true).catch((err) => toast(err.message));
+$('#cleanup-plan').addEventListener('click', (e) => {
+  const go = e.target.closest('[data-cleanup-goto]');
+  if (!go) return;
+  e.preventDefault();
+  $('#cleanup-dialog').close();
+  select(go.dataset.cleanupGoto);
 });
 
 // ------------------------------------------------------------------ Slack alerts (from this computer)

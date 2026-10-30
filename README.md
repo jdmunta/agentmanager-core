@@ -721,6 +721,27 @@ agentmgr leave           # the hub forgets this Mac
 
 **On Railway.** `hub/Dockerfile` builds the hub alone, with no node-pty and no Claude. Set `RAILWAY_DOCKERFILE_PATH=hub/Dockerfile`, `AGENTMGR_HUB_TOKEN`, `AGENTMGR_HUB_URL` (its https address) and, for Google sign-in, the three variables above; add a volume at `/data` so enrollments survive redeploys, and join with the `https://…up.railway.app` address.
 
+## Cleaning up old agents
+
+Agents you no longer use keep a session open and a worktree on disk. **Clean up** (in the top bar, or `agentmgr cleanup`) closes agents with no activity for a while and deletes agents that stayed closed long after that. Pick a strategy:
+
+| Strategy | What happens on its own (checked every few hours) |
+|---|---|
+| **Close, then delete** (`close-delete`) | Closes agents idle 14 days, and deletes agents closed for 14 more days. |
+| **Close; delete when I say** (`close`, the default) | Closes idle agents. Deleting waits for **Close and delete due now** or `agentmgr cleanup --run`. |
+| **Manual** (`manual`) | Nothing. Run it when you want. |
+| **Off** (`off`) | Nothing. |
+
+Both numbers of days are adjustable. Closing ends the session; resume the agent any time. Deleting removes the agent from your list along with the worktree AI Agent Manager created (Claude's own transcripts stay in `~/.claude`). Clean up never touches an agent marked **Keep** (the button on an agent), one that is working or still setting up, or a member of a team that is still going. It doesn't delete an agent with an open pull request, uncommitted changes, or commits that aren't on any other branch or remote: merge or push the work first. The dialog lists what is due, what is left alone and why, and the last run.
+
+```bash
+agentmgr cleanup                                  # what is due, and what is left alone
+agentmgr cleanup --run                            # close and delete what is due now (--close-only: just close)
+agentmgr cleanup --strategy close-delete --close-after 14 --delete-after 14
+```
+
+Agents closed before clean up was turned on count as closed from the first check, so nothing is deleted the day you turn it on.
+
 ## Saving state: flush and restart
 
 - **What's saved immediately.** Agent records (session IDs, settings, links) are written to `state.json` on every change, fsynced, then atomically replaced. Claude writes each conversation to its own transcript as it goes.
@@ -782,6 +803,7 @@ State lives in `~/.agentmanager/` (`state.json`, `daemon.log`, `repos/` for shar
   "conflictRefreshSec": 60,
   "stuck": { "repeatFailures": 3, "thrashReverts": 2, "thrashEdits": 10, "driftMinutes": 20, "driftActions": 25 },
   "judge": { "enabled": true, "model": "haiku", "dailyCalls": 300 },
+  "cleanup": { "strategy": "close", "closeAfterDays": 14, "deleteAfterDays": 14 },
   "hub": { "allow": ["view"], "projects": ["*"] }
 }
 ```

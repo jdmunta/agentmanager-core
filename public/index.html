@@ -22,6 +22,7 @@
       </div>
       <div class="top-actions">
         <input id="filter" type="search" placeholder="Filter agents" aria-label="Filter agents" />
+        <button id="cleanup-btn" title="Close agents idle for a while, and delete old closed ones">Clean up</button>
         <button id="alerts-btn" class="local-only" title="Slack alerts when an agent needs you">Alerts</button>
         <button id="remote-btn" class="local-only" title="Open AI Agent Manager from your phone">Remote access</button>
         <button id="ask-btn" title="A general Claude session with no repo or folder">Ask Claude</button>
@@ -386,6 +387,34 @@
           <button type="button" id="alerts-test">Send test</button>
           <span class="spacer"></span>
           <button type="button" id="alerts-close" class="ghost">Close</button>
+          <button class="primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="cleanup-dialog">
+      <form id="cleanup-form" method="dialog" class="alerts-body">
+        <h2>Clean up old agents</h2>
+        <p class="hint">Closing an agent ends its session; resume it any time. Deleting removes it from your list, with the worktree AI Agent Manager created (Claude's own transcripts stay). Never touched: agents marked <b>Keep</b>, agents working or setting up, and members of a team that is still going. Not deleted: agents with an open pull request, or with uncommitted changes or commits that aren't on any other branch.</p>
+        <label>Strategy
+          <select name="strategy">
+            <option value="close-delete">Close, then delete, automatically</option>
+            <option value="close">Close automatically; delete when I say</option>
+            <option value="manual">Nothing automatic; only when I run it</option>
+            <option value="off">Off</option>
+          </select>
+        </label>
+        <div class="row">
+          <label>Close after <span class="hint">days with no activity</span><input name="closeAfterDays" type="number" min="1" /></label>
+          <label>Delete after <span class="hint">days closed</span><input name="deleteAfterDays" type="number" min="1" /></label>
+        </div>
+        <div id="cleanup-plan" class="cleanup-plan"></div>
+        <p id="cleanup-error" class="error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" id="cleanup-run-close" title="Close the sessions that are due now">Close due now</button>
+          <button type="button" id="cleanup-run" class="danger" title="Close and delete what is due now">Close and delete due now</button>
+          <span class="spacer"></span>
+          <button type="button" id="cleanup-close" class="ghost">Close</button>
           <button class="primary">Save</button>
         </div>
       </form>

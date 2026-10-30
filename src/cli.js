@@ -1007,6 +1007,43 @@ export async function main(argv) {
     });
 
   program
+    .command('cleanup')
+    .description('Close agents idle for a while and delete ones closed long after that (see what it would do, run it, or pick the strategy)')
+    .option('--run', 'close and delete what is due now')
+    .option('--close-only', 'with --run: only close sessions, delete nothing')
+    .option('--strategy <s>', 'close-delete (both automatically), close (close automatically, delete by hand), manual, or off')
+    .option('--close-after <days>', 'close sessions idle this many days')
+    .option('--delete-after <days>', 'delete agents closed this many days')
+    .action(async (opts) => {
+      await daemon();
+      const patch = {
+        ...(opts.strategy ? { strategy: opts.strategy } : {}),
+        ...(opts.closeAfter ? { closeAfterDays: Number(opts.closeAfter) } : {}),
+        ...(opts.deleteAfter ? { deleteAfterDays: Number(opts.deleteAfter) } : {}),
+      };
+      if (Object.keys(patch).length) await api('PUT', '/cleanup', patch);
+      if (opts.run) {
+        const r = await api('POST', '/cleanup/run', { delete: !opts.closeOnly });
+        for (const x of r.closed) console.log(`${yellow('■')} closed ${x.name} (idle ${x.idleDays} days)`);
+        for (const x of r.deleted) console.log(`${red('×')} deleted ${x.name} (closed ${x.closedDays} days)`);
+        for (const x of r.failed) console.log(`${red('!')} ${x.name}: ${x.reason}`);
+        if (!r.closed.length && !r.deleted.length) console.log(dim('Nothing to clean up.'));
+        return;
+      }
+      const c = await api('GET', '/cleanup');
+      const what = { 'close-delete': 'closes and deletes automatically', close: 'closes automatically; delete with --run', manual: 'nothing automatic; use --run', off: 'off' }[c.strategy];
+      console.log(`${bold('Clean up')}: ${c.strategy} (${what}) · close after ${c.closeAfterDays} days idle · delete ${c.deleteAfterDays} days after closing`);
+      const rows = [
+        ...c.close.map((x) => [yellow('close'), x.name, `idle ${x.idleDays}d`, '']),
+        ...c.delete.map((x) => [red('delete'), x.name, `closed ${x.closedDays}d`, '']),
+        ...c.kept.map((x) => [dim('keep'), x.name, x.closedDays != null ? `closed ${x.closedDays}d` : `idle ${x.idleDays}d`, x.reason]),
+      ];
+      if (rows.length) table(rows, ['DUE', 'AGENT', 'AGE', 'KEPT BECAUSE']);
+      else console.log(dim('Nothing is due.'));
+      if (c.lastRun) console.log(dim(`\nLast run ${new Date(c.lastRun.at).toLocaleString()} (${c.lastRun.by}): closed ${c.lastRun.closed.length}, deleted ${c.lastRun.deleted.length}`));
+    });
+
+  program
     .command('doctor')
     .description('Check what AI Agent Manager needs on this machine (Node.js, Claude Code, git, gh, the daemon) and how to fix it')
     .action(async () => {
