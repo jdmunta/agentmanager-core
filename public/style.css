@@ -157,7 +157,7 @@ body.term-max .layout { grid-template-columns: 1fr; }
 .shortcut { flex: none; font: 600 11px/16px var(--mono); padding: 0 6px; border-radius: 4px; background: var(--accent); color: var(--accent-text); cursor: pointer; }
 .bl-head .shortcut { cursor: default; }
 .project-head .caret { width: 12px; color: var(--muted); flex: none; }
-.project-head .pname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-head .pname { font-size: 16px; font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-head .pcounts { display: flex; gap: 6px; align-items: center; color: var(--muted); font-weight: 500; font-size: 12px; }
 .project-head .prun { color: var(--green); }
 .project-head .pcount { white-space: nowrap; }
