@@ -95,6 +95,12 @@ export function bugFromRef(ref, source) {
   return { key: ref, url: null, source };
 }
 
+/** The Jira key when the text starts with a Jira link ("https://x.atlassian.net/browse/ABC-1 fix it" → "ABC-1"). */
+export function leadingJiraKey(text) {
+  const first = String(text ?? '').trimStart().match(/^<?(https?:\/\/\S+)/);
+  return first?.[1].match(JIRA_KEY)?.[1] ?? null;
+}
+
 /** Extract PR and bug references from free text. */
 export function extractRefs(text, bugPatterns = []) {
   const prs = [];

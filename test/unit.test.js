@@ -6,7 +6,7 @@ import test from 'node:test';
 import { repoNameFromUrl, isRemoteUrl } from '../src/git.js';
 import { slugify } from '../src/manager.js';
 import { STATE_VERSION, Store } from '../src/store.js';
-import { claudeProjectDir, extractRefs, scanTranscript } from '../src/tracker.js';
+import { claudeProjectDir, extractRefs, leadingJiraKey, scanTranscript } from '../src/tracker.js';
 import { passEnv, plist, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import claude from '../src/engines/claude.js';
@@ -43,6 +43,15 @@ test('extractRefs finds PR, Jira, GitHub issue and custom bug refs', () => {
   const { prs, bugs } = extractRefs(text, ['\\bABC-\\d+\\b']);
   assert.deepEqual(prs.map((p) => [p.repo, p.number]), [['acme/api', 12]]);
   assert.deepEqual(bugs.map((b) => b.key).sort(), ['ABC-777', 'PROJ-9', 'acme/api#5']);
+});
+
+test('leadingJiraKey names an agent after a Jira link at the start of its request', () => {
+  assert.equal(leadingJiraKey('https://acme.atlassian.net/browse/OPS-3 fix the login timeout'), 'OPS-3');
+  assert.equal(leadingJiraKey('  https://acme.atlassian.net/jira/software/projects/PROJ/issues/PROJ-12\nSee the comments'), 'PROJ-12');
+  assert.equal(leadingJiraKey('https://jira.example.com/jira/polaris/projects/IDEA/ideas/view/1?selectedIssue=IDEA-872'), 'IDEA-872');
+  assert.equal(leadingJiraKey('Fix the login timeout: https://acme.atlassian.net/browse/OPS-3'), null);
+  assert.equal(leadingJiraKey('https://github.com/acme/app/issues/4 fix it'), null);
+  assert.equal(leadingJiraKey(''), null);
 });
 
 test('extractRefs finds Jira keys in board, Polaris and issue links', () => {

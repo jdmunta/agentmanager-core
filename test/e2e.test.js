@@ -200,7 +200,7 @@ test('repo URL: one shared clone, one worktree + branch per intent', async () =>
   execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: seed });
 
   const url = `file://${origin}`;
-  const created = (await call('POST', '/agents', { intents: ['Task one', 'Task two'], repo: url, start: false })).body;
+  const created = (await call('POST', '/agents', { intents: ['Task one', 'https://acme.atlassian.net/browse/OPS-7 task two'], repo: url, start: false })).body;
   const ready = await Promise.all(
     created.map((a) => waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? agentNow(a.id) : null), 20000)),
   );
@@ -209,8 +209,10 @@ test('repo URL: one shared clone, one worktree + branch per intent', async () =>
   for (const a of ready) {
     assert.equal(a.repo, url);
     assert.ok(fs.existsSync(path.join(a.workdir, 'README.md')));
-    assert.match(a.git.branch, /^agent\/task-(one|two)-/);
+    assert.match(a.git.branch, /^agent\/(task-one|ops-7)-/);
   }
+  // A request that starts with a Jira link is named after the issue.
+  assert.deepEqual(ready.map((a) => a.name), ['task-one', 'OPS-7']);
 });
 
 test('general session: no repo or folder, optional first question', async () => {

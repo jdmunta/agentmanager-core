@@ -50,6 +50,7 @@ import { runningClaude, scanClaudeSessions } from './sessions.js';
 import {
   bugFromRef,
   extractRefs,
+  leadingJiraKey,
   prDetails,
   prFromUrl,
   prsForBranch,
@@ -540,7 +541,9 @@ export class AgentManager extends EventEmitter {
     const id = crypto.randomBytes(3).toString('hex');
     // An imported session keeps its ID, so the first start resumes it.
     const sessionId = adopt || crypto.randomUUID();
-    const slug = name || intent ? slugify(name || intent) : `general-${id}`;
+    // A request that starts with a Jira link is named after the issue ("ABC-123"), not the link.
+    const jiraKey = !name?.trim() && intent ? leadingJiraKey(intent) : null;
+    const slug = name || intent ? slugify(name || jiraKey || intent) : `general-${id}`;
     const refs = extractRefs(intent, this.config.bugPatterns);
 
     const agent = {
@@ -549,7 +552,7 @@ export class AgentManager extends EventEmitter {
       engine: engineId,
       project: project?.trim() || null,
       priority: parsePriority(priority),
-      name: name?.trim() || slug,
+      name: name?.trim() || jiraKey || slug,
       slug,
       intent,
       repo: general ? null : repo?.trim() || null,

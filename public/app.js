@@ -26,6 +26,20 @@ const [hashId, hashView] = loginHash ? [null, null] : (ticketHash ? goHash : loc
 let selectedId = hashId || null;
 let openTermOnLoad = hashView === 'term' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
+// "Only agents created in the last N days": remembered in this browser.
+const recent = (() => {
+  try {
+    return { on: localStorage.getItem('agentmgr.recentOn') === '1', days: Number(localStorage.getItem('agentmgr.recentDays')) || 7 };
+  } catch {
+    return { on: false, days: 7 };
+  }
+})();
+const saveRecent = () => {
+  try {
+    localStorage.setItem('agentmgr.recentOn', recent.on ? '1' : '0');
+    localStorage.setItem('agentmgr.recentDays', String(recent.days));
+  } catch {}
+};
 
 // ------------------------------------------------------------------ helpers
 
@@ -664,6 +678,13 @@ function renderList() {
             .toLowerCase()
             .includes(filterText),
   );
+  // The open agent stays in the list even when it's older.
+  const since = recent.on ? Date.now() - recent.days * 86_400_000 : 0;
+  const shown = since ? list.filter((a) => a.id === selectedId || (Date.parse(a.createdAt) || 0) >= since) : list;
+  const hidden = list.length - shown.length;
+  $('#recent-bar').hidden = agents.size === 0;
+  $('#recent-on').checked = recent.on;
+  $('#recent-hidden').innerHTML = hidden ? `${hidden} older ${hidden === 1 ? 'agent' : 'agents'} hidden · <button class="link" id="recent-off">Show all</button>` : '';
   $('#empty').hidden = agents.size > 0;
 
   const all = [...agents.values()];
@@ -675,8 +696,14 @@ function renderList() {
        <span class="spacer"></span><button class="link" id="import-btn" title="Continue Claude sessions you started in a terminal on this machine">Import</button><button class="link" id="flush-btn" title="Save session IDs, terminal scrollback and state to disk now (also automatic every 30s)">Save now</button>`
     : '';
 
-  $('#agent-list').innerHTML = projectGroups(list)
+  // Every agent a project has, also the ones a filter hides.
+  const totals = new Map();
+  for (const a of all) totals.set(a.projectInfo?.key ?? 'other', (totals.get(a.projectInfo?.key ?? 'other') ?? 0) + 1);
+
+  $('#agent-list').innerHTML = projectGroups(shown)
     .map((g) => {
+      const total = totals.get(g.key) ?? g.agents.length;
+      const n = g.agents.length;
       // While filtering, show every match; otherwise respect collapsed projects.
       const open = filterText || !collapsed.has(g.key) || g.agents.some((a) => a.id === selectedId);
       return `<li class="project ${open ? 'open' : ''}">
@@ -687,7 +714,8 @@ function renderList() {
           <span class="pcounts">
             ${g.top <= 1 ? prioChip(g.top) : ''}
             ${g.waiting ? `<span class="pill attention" title="needs input">${g.waiting}</span>` : ''}
-            <span title="running / agents">${g.running}/${g.agents.length}</span>
+            ${g.running ? `<span class="prun" title="${g.running} running">● ${g.running}</span>` : ''}
+            <span class="pcount" title="${total} agent${total === 1 ? '' : 's'} in this project${n < total ? `, ${n} shown` : ''}">${n < total ? `${n} of ${total}` : total} agent${total === 1 ? '' : 's'}</span>
           </span>
         </button>
         ${open ? `<ul class="project-agents">${g.agents.map(agentItem).join('')}</ul>` : ''}
@@ -2949,6 +2977,27 @@ $('#detail-body').addEventListener('input', (e) => {
 
 $('#filter').addEventListener('input', (e) => {
   filterText = e.target.value.trim().toLowerCase();
+  renderList();
+});
+
+$('#recent-days').value = recent.days;
+$('#recent-on').addEventListener('change', (e) => {
+  recent.on = e.target.checked;
+  saveRecent();
+  renderList();
+});
+$('#recent-days').addEventListener('input', (e) => {
+  const n = Math.floor(Number(e.target.value));
+  if (!(n >= 1)) return;
+  recent.days = Math.min(3650, n);
+  recent.on = true;
+  saveRecent();
+  renderList();
+});
+$('#recent-bar').addEventListener('click', (e) => {
+  if (e.target.id !== 'recent-off') return;
+  recent.on = false;
+  saveRecent();
   renderList();
 });
 
