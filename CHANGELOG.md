@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Project names** in the agent list are larger and bold, so they stand out from the agents under them.
+
 ## 1.1.0 (2026-10-30)
 
 - **Teams:** give one problem to a team of agents in roles. An analyst writes the analysis and critics challenge it until they agree; an implementer builds it, a tester tests it, and a reviewer approves it or sends it back to the implementer. They hand off through files with a verdict line, which you can read in the team view. The team asks you only at the end (open a PR, keep the branch, or send it back) or when they can't agree within the round limits. **+ New agents → Team**, or `agentmgr team start`.
