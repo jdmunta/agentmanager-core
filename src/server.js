@@ -11,6 +11,7 @@ import { AgentManager, shellNumber } from './manager.js';
 import { Backlog } from './backlog.js';
 import { Races } from './races.js';
 import { Teams } from './teams.js';
+import { Assistant } from './assistant.js';
 import { Cleanup } from './cleanup.js';
 import { listEngines, registerEngine } from './engines/index.js';
 import { Plugins, pluginSpecs } from './plugins.js';
@@ -59,6 +60,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const races = new Races({ manager, store });
   const teams = new Teams({ manager, store, config });
   const cleanup = new Cleanup({ manager, store, config, teams });
+  const assistant = new Assistant({ manager, store, config });
   // Alerts link to the phone address when remote access is on, else the local UI.
   const notifier = new Notifier({
     manager,
@@ -177,8 +179,16 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post(
     '/agents',
     wrap((req) => {
-      const { intents, intent, ...opts } = req.body ?? {};
-      return manager.createMany(Array.isArray(intents) ? intents : [intent], opts);
+      const { intents, intent, startedBy, ...opts } = req.body ?? {};
+      if (opts.kind === 'assistant') throw fail(400, 'Start the assistant with POST /assistant/start');
+      const list = (Array.isArray(intents) ? intents : [intent]).map((i) => String(i ?? '').trim()).filter(Boolean);
+      // Agents the assistant's own session starts: its limits apply, and they are marked as its.
+      const extra = assistant.admit(req.headers['x-agentmgr-agent'], list, opts);
+      const created = manager.createMany(list, { ...opts, ...extra });
+      if (extra.startedBy) {
+        for (const a of created) notifier.send('assistant', a, `was started by the assistant: ${a.intent.replace(/\s+/g, ' ').slice(0, 160)}`);
+      }
+      return created;
     }),
   );
   api.post('/general', wrap((req) => manager.createGeneral(req.body ?? {})));
@@ -404,6 +414,15 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.delete('/races/:id', wrap((req) => races.remove(req.params.id)));
 
   // Clean up old agents: the strategy and days (kept in config.json), what a run would do, run now.
+  api.get('/assistant', wrap(() => assistant.status()));
+  api.put('/assistant', wrap((req) => {
+    const next = assistant.update(req.body ?? {});
+    saveConfig({ assistant: next });
+    return assistant.status();
+  }));
+  api.post('/assistant/start', wrap(() => assistant.start()));
+  api.post('/assistant/pause', wrap(() => assistant.pause()));
+  api.post('/assistant/check', wrap(() => assistant.check()));
   api.get('/cleanup', wrap(() => cleanup.status()));
   api.put('/cleanup', wrap(async (req) => {
     const next = cleanup.update(req.body ?? {});
@@ -756,6 +775,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     if (closing) return;
     closing = true;
     cleanup.close();
+    assistant.close();
     console.log(`[agentmgr] shutting down (${reason}); closing agents so their sessions are saved`);
     await manager.stopAll({ final: true });
     await manager.flush().catch((err) => console.error(`[agentmgr] final flush failed: ${err.message}`));
@@ -792,6 +812,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     manager,
     teams,
     cleanup,
+    assistant,
     backlog,
     live,
     url: `http://${host}:${port}`,

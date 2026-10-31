@@ -200,7 +200,7 @@ function explainBox(a) {
 const REVIEW_VERDICT = { complete: '✓ Complete', partial: '≈ Partly done', not_done: '✗ Not done' };
 /** The AI judge's review of the work against the intent and brief: button, and the last result once handled. */
 function reviewBox(a) {
-  if (a.kind === 'general') return { button: '', box: '' };
+  if (noRepo(a)) return { button: '', box: '' };
   const r = a.aiReview;
   const button = `<button class="small" data-act="review" ${r?.pending ? 'disabled' : ''}
     title="Check the work against the intent and brief: what is met, missing or risky. A separate one-off model call; runs by itself when the agent says it is done">${r?.pending ? 'Reviewing…' : 'Review with AI'}</button>`;
@@ -429,7 +429,7 @@ function openPlan(agentId) {
 const PLAN_LABEL = { writing: 'being written', review: 'waiting for your review', changes: 'changes requested', approved: 'approved' };
 /** The plan-review row in the brief card: status, open, approve; or the switch to turn review on. */
 function planRow(a) {
-  if (a.kind === 'general') return '';
+  if (noRepo(a)) return '';
   const p = a.planReview;
   if (!p) {
     return a.status === 'done' ? '' : `<div class="plan-row"><button class="small ghost" data-act="plan-on" title="The agent writes an implementation plan and waits for your approval before changing anything">Review its plan first</button></div>`;
@@ -489,7 +489,7 @@ function resultsCard(a) {
 }
 
 function briefPanel(a) {
-  if (a.kind === 'general') return '';
+  if (noRepo(a)) return '';
   const b = a.brief;
   const ex = explainBox(a);
   const rv = reviewBox(a);
@@ -598,12 +598,14 @@ function saveCollapsed() {
 const prioChip = (p, { always = false } = {}) =>
   p === 2 && !always ? '' : `<span class="prio p${p}" title="Priority P${p}">P${p}</span>`;
 
+const noRepo = (a) => a.kind === 'general' || a.kind === 'assistant';
+
 function agentItem(a) {
   const st = statusOf(a);
   const idle = !isActive(a);
   return `<li data-id="${a.id}" class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''}">
     <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
-    <div class="intent">${a.kind === 'general' ? '<span class="tag">general</span> ' : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${esc(a.intent || 'General session')}</div>
+    <div class="intent">${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${esc(a.intent || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
     <div class="meta">
       <span class="mono">${a.id}</span>
@@ -652,7 +654,7 @@ function projectGroups(list) {
     const same = byName ? byName.get(g.name).length : out.filter((x) => x.name === g.name).length;
     g.label = same > 1 && g.full ? g.full : g.name;
   }
-  const special = (g) => (g.key === 'general' ? 1 : g.key === 'other' ? 2 : 0);
+  const special = (g) => (g.key === 'assistant' ? -1 : g.key === 'general' ? 1 : g.key === 'other' ? 2 : 0);
   return out.sort(
     (a, b) =>
       special(a) - special(b) ||
@@ -1119,7 +1121,7 @@ for (const root of [$('#inbox-view'), $('#detail-body')]) {
 // ------------------------------------------------------------------ checkpoints and forks
 
 function checkpointsCard(a) {
-  if (a.kind === 'general' || !a.git?.branch) return '';
+  if (noRepo(a) || !a.git?.branch) return '';
   const cps = [...(a.checkpoints ?? [])].reverse();
   const forks = [...agents.values()].filter((x) => x.forkOf?.agentId === a.id);
   return `<div class="card">
@@ -1545,7 +1547,7 @@ function renderDetail() {
             ${[0, 1, 2, 3].map((p) => `<option value="${p}" ${p === (a.priority ?? 2) ? 'selected' : ''}>P${p}</option>`).join('')}
           </select>
           <span class="d-name">${esc(a.name)}</span> <span class="pill ${st}">${pillText(st)}</span>${a.kind === 'general' ? ' <span class="tag">general</span>' : ''}</h2>
-        <p class="intent">${esc(a.intent || (a.kind === 'general' ? 'General session: ask Claude anything in the terminal.' : ''))}</p>
+        <p class="intent">${esc(a.intent || (a.kind === 'general' ? 'General session: ask Claude anything in the terminal.' : a.kind === 'assistant' ? 'Your assistant: it checks for new work every few minutes and starts agents for it. Settings and activity: Assistant in the top bar.' : ''))}</p>
       </div>
       <div class="d-actions">
         ${a.status === 'error' && !a.workdir
@@ -3502,6 +3504,115 @@ $('#cleanup-plan').addEventListener('click', (e) => {
   $('#cleanup-dialog').close();
   select(go.dataset.cleanupGoto);
 });
+
+// ------------------------------------------------------------------ assistant
+
+const ASSISTANT_SOURCES = ['jira', 'comments', 'reviews', 'ci', 'slack'];
+let assistantState = null;
+
+function renderAssistantDot() {
+  const a = assistantState;
+  const dot = $('#assistant-dot');
+  dot.hidden = !a?.agentId;
+  if (a) {
+    dot.className = `assistant-dot ${a.on ? (a.busy ? 'busy' : 'on') : 'off'}`;
+    dot.title = a.on ? (a.busy ? 'Checking now' : 'On') : 'Paused';
+  }
+}
+
+async function loadAssistant({ fill = true } = {}) {
+  const a = await api('GET', '/assistant');
+  assistantState = a;
+  renderAssistantDot();
+  const f = $('#assistant-form');
+  if (fill) {
+    for (const k of ASSISTANT_SOURCES) f[`src_${k}`].checked = a.sources.includes(k);
+    f.everyMin.value = a.everyMin;
+    f.maxPerDay.value = a.maxPerDay;
+    f.maxRunning.value = a.maxRunning;
+    f.notes.value = a.notes ?? '';
+  }
+  const state = !a.agentId ? 'Not set up yet. Start it to create its session.' : a.on ? (a.busy ? 'On: checking now.' : 'On.') : 'Paused: not checking.';
+  $('#assistant-status').innerHTML = `<p><b>${esc(state)}</b>
+    ${a.lastCheckAt ? ` Last check ${ago(a.lastCheckAt)}.` : ''}${a.nextAt && a.on ? ` Next ${new Date(a.nextAt) <= new Date() ? 'when it is free' : `at ${new Date(a.nextAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}.` : ''}
+    ${a.agentId ? ` Started ${a.startedToday} agent${a.startedToday === 1 ? '' : 's'} today, ${a.startedTotal} in all.` : ''}</p>
+    ${a.started.length ? `<ul class="assistant-started">${a.started.slice(0, 8).map((x) => `<li><a href="#${x.id}" data-assistant-goto="${x.id}">${esc(x.name)}</a> <span class="hint">${ago(x.createdAt)} · ${esc(x.intent.slice(0, 90))}</span></li>`).join('')}</ul>` : ''}`;
+  $('#assistant-activity').innerHTML = a.activity ? `<h4>Activity</h4><div class="md">${md(a.activity.split(/\n(?=## )/).reverse().slice(0, 10).join('\n').replace(/([^\n])\n(?=[^\n#\-*])/g, '$1  \n'))}</div>` : a.agentId ? '<p class="hint">No activity yet. Its first check writes here.</p>' : '';
+  $('#assistant-start').hidden = Boolean(a.on);
+  $('#assistant-start').textContent = a.agentId ? 'Turn on' : 'Start';
+  $('#assistant-pause').hidden = !a.on;
+  $('#assistant-check').hidden = !a.on;
+  $('#assistant-open').hidden = !a.agentId;
+  $('#assistant-error').hidden = true;
+  return a;
+}
+
+const assistantPatch = (f) => ({
+  sources: ASSISTANT_SOURCES.filter((k) => f[`src_${k}`].checked),
+  everyMin: Number(f.everyMin.value),
+  maxPerDay: Number(f.maxPerDay.value),
+  maxRunning: Number(f.maxRunning.value),
+  notes: f.notes.value,
+});
+const assistantError = (err) => {
+  $('#assistant-error').textContent = err.message;
+  $('#assistant-error').hidden = false;
+};
+$('#assistant-btn').onclick = async () => {
+  $('#assistant-dialog').showModal();
+  await loadAssistant().catch(assistantError);
+};
+$('#assistant-close').onclick = () => $('#assistant-dialog').close();
+$('#assistant-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('PUT', '/assistant', assistantPatch(e.target));
+    toast(assistantState?.running ? 'Saved. A running assistant uses the new watch list and notes after Pause and Turn on.' : 'Assistant settings saved');
+    await loadAssistant();
+  } catch (err) {
+    assistantError(err);
+  }
+});
+$('#assistant-start').onclick = async () => {
+  try {
+    if (!assistantState?.agentId) await api('PUT', '/assistant', assistantPatch($('#assistant-form')));
+    await api('POST', '/assistant/start');
+    toast('Assistant on: its first check starts in a moment');
+    await loadAssistant({ fill: false });
+  } catch (err) {
+    assistantError(err);
+  }
+};
+$('#assistant-pause').onclick = async () => {
+  try {
+    await api('POST', '/assistant/pause');
+    await loadAssistant({ fill: false });
+  } catch (err) {
+    assistantError(err);
+  }
+};
+$('#assistant-check').onclick = async () => {
+  try {
+    await api('POST', '/assistant/check');
+    toast('Asked the assistant to check now');
+    await loadAssistant({ fill: false });
+  } catch (err) {
+    assistantError(err);
+  }
+};
+$('#assistant-open').onclick = () => {
+  $('#assistant-dialog').close();
+  if (assistantState?.agentId) select(assistantState.agentId);
+};
+$('#assistant-dialog').addEventListener('click', (e) => {
+  const go = e.target.closest('[data-assistant-goto]');
+  if (!go) return;
+  e.preventDefault();
+  $('#assistant-dialog').close();
+  select(go.dataset.assistantGoto);
+});
+loadAssistant({ fill: false }).catch(() => {});
+setInterval(() => loadAssistant({ fill: false }).catch(() => {}), 60_000);
 
 // ------------------------------------------------------------------ Slack alerts (from this computer)
 

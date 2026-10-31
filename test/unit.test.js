@@ -728,3 +728,28 @@ test('clean up settings: defaults and bounds', () => {
   assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'close-delete', closeAfterDays: '7' } }), { strategy: 'close-delete', closeAfterDays: 7, deleteAfterDays: 14 });
   assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'nuke', closeAfterDays: 0, deleteAfterDays: -3 } }), { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14 });
 });
+
+test('assistantSettings: defaults, bounds and known sources only', async () => {
+  const { assistantSettings, ASSISTANT_DEFAULTS } = await import('../src/assistant.js');
+  assert.deepEqual(assistantSettings({}).sources, ASSISTANT_DEFAULTS.sources);
+  const s = assistantSettings({ assistant: { everyMin: 0, maxPerDay: -1, sources: ['jira', 'fax'], notes: 7 } });
+  assert.equal(s.everyMin, 15);
+  assert.equal(s.maxPerDay, 10);
+  assert.deepEqual(s.sources, ['jira']);
+  assert.equal(s.notes, '');
+  assert.equal(assistantSettings({ assistant: { everyMin: 99999 } }).everyMin, 1440);
+});
+
+test('assistantPrompt: one section per watched source, limits, memory and the never list', async () => {
+  const { assistantPrompt, assistantSettings } = await import('../src/assistant.js');
+  const p = assistantPrompt(assistantSettings({ assistant: { sources: ['jira', 'reviews'], maxPerDay: 3, notes: 'OPS goes to @cc' } }), '/tmp/a', 'agentmgr');
+  assert.match(p, /Jira, new assignments/);
+  assert.match(p, /agentmgr add @<project> "<the issue link>/);
+  assert.match(p, /gh search prs --review-requested=@me/);
+  assert.doesNotMatch(p, /Failing checks|Slack:/);
+  assert.match(p, /at most 3 new agents a day/);
+  assert.match(p, /\/tmp\/a\/handled\.json/);
+  assert.match(p, /\/tmp\/a\/activity\.md/);
+  assert.match(p, /Never merge, approve/);
+  assert.match(p, /OPS goes to @cc/);
+});

@@ -1043,6 +1043,68 @@ export async function main(argv) {
       if (c.lastRun) console.log(dim(`\nLast run ${new Date(c.lastRun.at).toLocaleString()} (${c.lastRun.by}): closed ${c.lastRun.closed.length}, deleted ${c.lastRun.deleted.length}`));
     });
 
+  const asCmd = program.command('assistant').description('An always-on session that finds new work (Jira, GitHub, Slack) and starts agents for it');
+  const showAssistant = (a) => {
+    const state = !a.agentId ? dim('not set up (agentmgr assistant start)') : a.on ? green(a.busy ? 'on, checking now' : 'on') : yellow('paused');
+    console.log(`${bold('Assistant')}: ${state}${a.agentId ? dim(`  agent ${a.agentId}`) : ''}`);
+    console.log(`checks every ${a.everyMin} min · watches ${a.sources.join(', ') || 'nothing'} · at most ${a.maxPerDay} new agents a day, ${a.maxRunning} running`);
+    if (a.lastCheckAt) console.log(dim(`last check ${new Date(a.lastCheckAt).toLocaleString()}${a.nextAt ? ` · next ${new Date(a.nextAt).toLocaleTimeString()}` : ''} · started ${a.startedToday} today, ${a.startedTotal} in all`));
+    for (const x of a.started.slice(0, 10)) console.log(`  ${green('+')} ${bold(x.name)} ${dim(x.id)}  ${truncate(x.intent, 70)}`);
+  };
+  asCmd
+    .command('status', { isDefault: true })
+    .description('Show whether it is on, its settings, and the agents it started')
+    .option('--activity', 'also print its activity log')
+    .action(async (opts) => {
+      await daemon();
+      const a = await api('GET', '/assistant');
+      showAssistant(a);
+      if (opts.activity) console.log(`\n${a.activity || dim('No activity yet.')}`);
+    });
+  asCmd
+    .command('start')
+    .description('Set it up (first time) or turn it back on')
+    .action(async () => {
+      await daemon();
+      showAssistant(await api('POST', '/assistant/start'));
+    });
+  asCmd
+    .command('pause')
+    .description('Stop checking and close its session (start resumes it with its memory)')
+    .action(async () => {
+      await daemon();
+      showAssistant(await api('POST', '/assistant/pause'));
+    });
+  asCmd
+    .command('check')
+    .description('Check for new work now')
+    .action(async () => {
+      await daemon();
+      await api('POST', '/assistant/check');
+      console.log(`${green('✓')} asked the assistant to check now`);
+    });
+  asCmd
+    .command('set')
+    .description('Change its settings (they apply from its next launch; pause and start to apply now)')
+    .option('--every <minutes>', 'check this often')
+    .option('--sources <list>', 'comma-separated: jira,comments,reviews,ci,slack')
+    .option('--max-per-day <n>', 'new agents a day, at most')
+    .option('--max-running <n>', 'of its agents running at once, at most')
+    .option('--permission-mode <mode>', 'its own permission mode (default auto, so it can run agentmgr and gh without asking)')
+    .option('--notes <text>', 'standing notes, e.g. which Jira project goes to which repo')
+    .action(async (opts) => {
+      await daemon();
+      const patch = {
+        ...(opts.every ? { everyMin: Number(opts.every) } : {}),
+        ...(opts.sources ? { sources: opts.sources.split(',').map((x) => x.trim()).filter(Boolean) } : {}),
+        ...(opts.maxPerDay ? { maxPerDay: Number(opts.maxPerDay) } : {}),
+        ...(opts.maxRunning ? { maxRunning: Number(opts.maxRunning) } : {}),
+        ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+        ...(opts.notes !== undefined ? { notes: opts.notes } : {}),
+      };
+      showAssistant(await api('PUT', '/assistant', patch));
+    });
+
   program
     .command('doctor')
     .description('Check what AI Agent Manager needs on this machine (Node.js, Claude Code, git, gh, the daemon) and how to fix it')
@@ -1459,7 +1521,7 @@ export async function main(argv) {
           i === 0 || proj(agents[i - 1]) !== proj(a) ? bold(truncate(proj(a), 30)) : '',
           a.priority === 0 ? red(bold('P0')) : a.priority === 1 ? red('P1') : a.priority === 3 ? dim('P3') : 'P2',
           a.id,
-          truncate(a.kind === 'general' ? `${a.name} (general)` : a.name, 28),
+          truncate(a.kind === 'general' ? `${a.name} (general)` : a.startedBy ? `${a.name} (assistant)` : a.name, 28),
           statusLabel(a),
           a.git?.branch ?? '',
           String(a.prs.length || ''),

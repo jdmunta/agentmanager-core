@@ -10,7 +10,8 @@ const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin',
 export async function api(method, route, body) {
   const res = await fetch(`${BASE}/api${route}`, {
     method,
-    headers: { 'content-type': 'application/json', 'x-agentmgr': '1' },
+    // From inside an agent's session, say which agent is asking (the assistant's limits use it).
+    headers: { 'content-type': 'application/json', 'x-agentmgr': '1', ...(process.env.AGENTMGR_AGENT_ID ? { 'x-agentmgr-agent': process.env.AGENTMGR_AGENT_ID } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));

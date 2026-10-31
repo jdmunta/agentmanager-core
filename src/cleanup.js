@@ -81,6 +81,7 @@ export class Cleanup {
   /** Why an agent is left alone whatever its age, or null. */
   protectedBy(agent) {
     if (agent.keep) return 'marked Keep';
+    if (agent.kind === 'assistant') return 'the assistant';
     if (agent.status === 'preparing') return 'still setting up';
     const rt = this.manager.runtimes.get(agent.id);
     if (rt?.pty && rt.busy) return 'working';

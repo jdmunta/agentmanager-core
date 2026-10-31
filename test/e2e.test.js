@@ -2040,6 +2040,73 @@ test('clean up: closes idle agents, deletes long-closed ones, keeps Keep and uns
   }
 });
 
+test('assistant: always-on session, check now, its agents marked, daily cap, one agent per issue, pause', async () => {
+  const work = path.join(home, 'assistant-work');
+  fs.mkdirSync(work, { recursive: true });
+  assert.equal((await call('PUT', '/assistant', { sources: ['jira', 'fax'] })).status, 400);
+  assert.equal((await call('PUT', '/assistant', { everyMin: 0 })).status, 400);
+  const saved = (await call('PUT', '/assistant', { everyMin: 30, maxPerDay: 2, maxRunning: 5, sources: ['jira', 'comments', 'ci'], notes: 'Jira project OPS is the assistant-work folder' })).body;
+  assert.equal(saved.agentId, null);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).assistant.maxPerDay, 2);
+  assert.equal((await call('POST', '/assistant/check')).status, 409, 'not set up yet');
+
+  const on = (await call('POST', '/assistant/start')).body;
+  assert.ok(on.agentId);
+  assert.equal(on.on, true);
+  const id = on.agentId;
+  const a = await runningAgent(id);
+  assert.equal(a.kind, 'assistant');
+  assert.equal(a.projectInfo.name, 'Assistant');
+  assert.equal(fs.realpathSync(a.workdir), fs.realpathSync(path.join(home, 'assistant')));
+  const launch = await waitFor(() => launches().filter((l) => l.args.includes(a.sessionId)).at(-1), 10000, 'the assistant launched');
+  const prompt = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
+  assert.match(prompt, /You are the person's assistant/);
+  assert.match(prompt, /Jira project OPS is the assistant-work folder/);
+  assert.match(prompt, /Failing checks/);
+  assert.doesNotMatch(prompt, /Slack:/, 'only the chosen sources');
+  assert.ok(launch.args.includes('auto'), 'runs in auto mode so it can use agentmgr and gh');
+  assert.equal((await call('POST', '/assistant/start')).body.agentId, id, 'one assistant');
+
+  const checked = (await call('POST', '/assistant/check')).body;
+  assert.equal(checked.checks, 1);
+  assert.ok(checked.lastCheckAt);
+
+  // Its own session's requests carry its agent ID: marked as its agents, within its limits.
+  const asAssistant = { 'x-agentmgr': '1', 'x-agentmgr-agent': id };
+  const first = await call('POST', '/agents', { intents: ['https://acme.atlassian.net/browse/OPS-9 fix the login timeout'], dir: work, start: false }, asAssistant);
+  assert.equal(first.status, 200);
+  assert.equal(first.body[0].name, 'OPS-9');
+  assert.equal(first.body[0].startedBy, id);
+  const dup = await call('POST', '/agents', { intents: ['https://acme.atlassian.net/browse/OPS-9 fix it again'], dir: work, start: false }, asAssistant);
+  assert.equal(dup.status, 409);
+  assert.match(dup.body.error, /OPS-9 already exists/);
+  assert.equal((await call('POST', '/agents', { intents: ['https://acme.atlassian.net/browse/OPS-10 a', 'https://acme.atlassian.net/browse/OPS-11 b'], dir: work, start: false }, asAssistant)).status, 429);
+  const second = await call('POST', '/agents', { intents: ['https://acme.atlassian.net/browse/OPS-10 add paging'], dir: work, start: false }, asAssistant);
+  assert.equal(second.status, 200);
+  const capped = await call('POST', '/agents', { intents: ['https://acme.atlassian.net/browse/OPS-12 more'], dir: work, start: false }, asAssistant);
+  assert.equal(capped.status, 429);
+  assert.match(capped.body.error, /2 new agents a day/);
+  // Anyone else: no limits, not marked.
+  const mine = await call('POST', '/agents', { intents: ['https://acme.atlassian.net/browse/OPS-12 by hand'], dir: work, start: false });
+  assert.equal(mine.status, 200);
+  assert.equal(mine.body[0].startedBy, undefined);
+  assert.equal((await call('POST', '/agents', { kind: 'assistant', intents: ['x'] })).status, 400);
+
+  const st = (await call('GET', '/assistant')).body;
+  assert.equal(st.startedToday, 2);
+  assert.deepEqual(st.started.map((x) => x.name).sort(), ['OPS-10', 'OPS-9']);
+  fs.writeFileSync(path.join(a.workdir, 'activity.md'), '## 2026-10-30 10:00\nStarted OPS-9.\n');
+  assert.match((await call('GET', '/assistant')).body.activity, /Started OPS-9/);
+  assert.ok(!(await call('GET', '/cleanup')).body.close.some((x) => x.id === id), 'clean up leaves it alone');
+
+  const paused = (await call('POST', '/assistant/pause')).body;
+  assert.equal(paused.on, false);
+  assert.equal((await agentNow(id)).runtime.running, false);
+  assert.equal(paused.nextAt, null);
+  for (const x of [first.body[0], second.body[0], mine.body[0]]) await call('DELETE', `/agents/${x.id}`);
+  await call('DELETE', `/agents/${id}`);
+});
+
 test('hub: invite, join, fleet view, signed reconnects, forged runners refused, remove, leave', async () => {
   const { startHub } = await import('../src/hub.js');
   const hubHome = path.join(home, 'hub');
