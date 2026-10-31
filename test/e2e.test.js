@@ -3310,6 +3310,72 @@ test('getting started: what is set up, and what this machine is missing', async 
   assert.ok(r.checks.every((c) => ['warn', 'fail'].includes(c.status)));
 });
 
+test('restart and serve wait for a daemon that is still closing its agents', async () => {
+  const { execFile, spawn } = await import('node:child_process');
+  const h2 = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-restart-'));
+  const port2 = port + 7;
+  fs.writeFileSync(path.join(h2, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], judge: { enabled: false }, cleanup: { strategy: 'off' } }));
+  const env = { ...process.env, AGENTMGR_HOME: h2, AGENTMGR_PORT: String(port2), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', CLAUDE_CONFIG_DIR: path.join(h2, 'claude'), FAKE_CLAUDE_LOG: path.join(h2, 'fake.log'), FAKE_CLAUDE_HUP_DELAY_MS: '2500', AGENTMGR_SERVICE_LABEL: `com.agentmgr.test-${process.pid}` };
+  const bin = path.join(here, '..', 'bin', 'agentmgr.js');
+  const cli = (...args) => new Promise((resolve) => execFile(process.execPath, [bin, ...args], { env, timeout: 60_000 }, (e, out, err) => resolve({ code: e?.code ?? 0, out: `${out}${err}` })));
+  const get = async (route) => {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port2}/api${route}`);
+      return await r.json();
+    } catch {
+      return null;
+    }
+  };
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const first = spawn(process.execPath, [bin, 'serve'], { env, stdio: 'ignore' });
+  try {
+    const h = await waitFor(() => get('/health'), 15000, 'first daemon');
+    assert.equal(h.closing, false);
+    const dir = path.join(h2, 'work');
+    fs.mkdirSync(dir);
+    const made = await fetch(`http://127.0.0.1:${port2}/api/agents`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agentmgr': '1' }, body: JSON.stringify({ intent: 'Slow to close', dir }) }).then((r) => r.json());
+    await waitFor(async () => (await get(`/agents/${made[0].id}`))?.runtime?.running, 15000, 'agent running');
+
+    // restart: the old daemon takes ~2.5 s to close its agent; the new one starts after it exits.
+    const r = await cli('restart');
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /restarted/);
+    assert.ok(!alive(h.pid), 'the old daemon has exited');
+    const h3 = await get('/health');
+    assert.ok(h3 && h3.pid !== h.pid && !h3.closing, 'a new daemon answers');
+    await waitFor(async () => (await get(`/agents/${made[0].id}`))?.runtime?.running, 15000, 'agent resumed');
+
+    // shutdown says stopped only once it has; serve right after starts a new one.
+    const s = await cli('shutdown');
+    assert.match(s.out, /Daemon stopped/);
+    assert.ok(!alive(h3.pid));
+    const again = spawn(process.execPath, [bin, 'serve'], { env, stdio: 'ignore' });
+    const h4 = await waitFor(() => get('/health'), 15000, 'serve after shutdown');
+    // A serve started while one is still closing waits for it instead of giving up.
+    const closing = fetch(`http://127.0.0.1:${port2}/api/shutdown`, { method: 'POST', headers: { 'x-agentmgr': '1' } }).catch(() => null);
+    await waitFor(async () => (await get('/health'))?.closing || !alive(h4.pid), 5000, 'closing');
+    const waiter = spawn(process.execPath, [bin, 'serve'], { env, stdio: 'ignore' });
+    await closing;
+    const h5 = await waitFor(async () => {
+      const x = await get('/health');
+      return x && x.pid !== h4.pid && !x.closing ? x : null;
+    }, 20000, 'the waiting serve took over');
+    assert.equal(h5.pid, waiter.pid);
+    again.kill();
+    await cli('shutdown');
+  } finally {
+    first.kill();
+    await cli('shutdown');
+  }
+});
+
 test('About: version, release date, author, license, links and this daemon', async () => {
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   const { status, body: a } = await call('GET', '/about');
