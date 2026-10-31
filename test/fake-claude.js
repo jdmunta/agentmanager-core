@@ -187,4 +187,5 @@ process.stdin.on('data', (d) => {
   if (s.includes('exit')) process.exit(3);
   process.stdout.write(`echo:${s}`);
 });
-process.on('SIGHUP', () => process.exit(0));
+// FAKE_CLAUDE_HUP_DELAY_MS: take that long to close, like a busy session.
+process.on('SIGHUP', () => setTimeout(() => process.exit(0), Number(process.env.FAKE_CLAUDE_HUP_DELAY_MS) || 0));

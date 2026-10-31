@@ -193,7 +193,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   };
   const fail = (status, message) => Object.assign(new Error(message), { status });
 
-  api.get('/health', wrap(() => ({ ok: true, pid: process.pid, home: paths.home, claudeBin: config.claudeBin })));
+  // `closing` while shutting down: it still answers until every agent is closed, then exits.
+  api.get('/health', wrap(() => ({ ok: true, pid: process.pid, home: paths.home, claudeBin: config.claudeBin, closing })));
   api.get('/agents', wrap(() => manager.list()));
   api.get('/engines', wrap(() => listEngines(config)));
   api.post(

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { Command, Option } from 'commander';
 import WebSocket from 'ws';
 import { HOST, PORT } from './config.js';
-import { api, BASE, ensureDaemon, isRunning } from './client.js';
+import { api, BASE, ensureDaemon, health, isRunning, waitForExit } from './client.js';
 import { about, latestRelease } from './about.js';
 
 const tty = process.stdout.isTTY;
@@ -271,9 +271,15 @@ export async function main(argv) {
     .command('serve')
     .description('Run the agent daemon (API + web UI) in the foreground')
     .action(async () => {
-      if (await isRunning()) {
+      const h = await health();
+      if (h && !h.closing) {
         // Clean exit, so a login service doesn't keep retrying while another daemon owns the port.
         return console.log(`[agentmgr] a daemon is already running at ${BASE}; not starting another`);
+      }
+      if (h?.closing) {
+        // One that is shutting down closes its agents first; start once it has exited.
+        console.log(`[agentmgr] waiting for the previous daemon (pid ${h.pid}) to finish shutting down`);
+        if (!(await waitForExit(h.pid))) return console.log(`[agentmgr] the previous daemon (pid ${h.pid}) is still shutting down; not starting`);
       }
       const { startServer } = await import('./server.js');
       const { url } = await startServer();
@@ -1789,10 +1795,11 @@ export async function main(argv) {
     .description('Register the daemon with launchd (macOS) or systemd --user (Linux) and start it')
     .action(async () => {
       const svc = await import('./service.js');
-      if (await isRunning()) {
+      const h = await health();
+      if (h) {
         // Hand over to the service-managed daemon; running agents are resumed by it.
-        await api('POST', '/shutdown');
-        for (let i = 0; i < 50 && (await isRunning()); i++) await new Promise((r) => setTimeout(r, 200));
+        if (!h.closing) await api('POST', '/shutdown');
+        await waitForExit(h.pid, { onWait: (s) => console.log(dim(`closing agents… (${s}s)`)) });
       }
       const res = await svc.install();
       for (let i = 0; i < 100 && !(await isRunning()); i++) await new Promise((r) => setTimeout(r, 200));
@@ -2001,7 +2008,8 @@ export async function main(argv) {
     .description('Flush, stop the daemon, and start it again; running agents resume their sessions')
     .action(async () => {
       const svc = await import('./service.js');
-      if (await isRunning()) {
+      const before = await health();
+      if (before && !before.closing) {
         try {
           const r = await api('POST', '/flush');
           console.log(dim(`saved ${r.agents} agents, scrollback for ${r.scrollback}`));
@@ -2011,13 +2019,21 @@ export async function main(argv) {
           console.log(dim('running daemon is an older version (no flush); restarting it to upgrade'));
         }
         await api('POST', '/shutdown');
-        for (let i = 0; i < 100 && (await isRunning()); i++) await new Promise((res) => setTimeout(res, 200));
+      }
+      // Wait for the old process itself to exit: it answers until every agent is closed.
+      if (before?.pid) {
+        const gone = await waitForExit(before.pid, { onWait: (s) => console.log(dim(`closing agents… (${s}s)`)) });
+        if (!gone) throw new Error(`The daemon (pid ${before.pid}) is still shutting down after 5 minutes; check the log`);
       }
       const st = await svc.status();
       if (st.loaded) await svc.kickstart();
       else await ensureDaemon({ quiet: true });
-      for (let i = 0; i < 100 && !(await isRunning()); i++) await new Promise((res) => setTimeout(res, 200));
-      if (!(await isRunning())) throw new Error('Daemon did not come back; check the log');
+      const back = async () => {
+        const h = await health();
+        return Boolean(h && !h.closing && h.pid !== before?.pid);
+      };
+      for (let i = 0; i < 150 && !(await back()); i++) await new Promise((res) => setTimeout(res, 200));
+      if (!(await back())) throw new Error('Daemon did not come back; check the log');
       const agents = await api('GET', '/agents');
       console.log(`${green('✓')} restarted${st.loaded ? ' (login service)' : ''}; ${agents.filter((a) => a.desired === 'running').length} agents set to resume`);
     });
@@ -2026,9 +2042,12 @@ export async function main(argv) {
     .command('shutdown')
     .description('Stop the daemon (running agents are closed; sessions are kept)')
     .action(async () => {
-      if (!(await isRunning())) return console.log('Daemon is not running');
-      await api('POST', '/shutdown');
-      console.log('Daemon stopped');
+      const h = await health();
+      if (!h) return console.log('Daemon is not running');
+      if (!h.closing) await api('POST', '/shutdown');
+      // It closes every agent before it exits; say stopped only once it has.
+      const gone = await waitForExit(h.pid, { onWait: (s) => console.log(dim(`closing agents… (${s}s)`)) });
+      console.log(gone ? 'Daemon stopped' : yellow(`The daemon (pid ${h.pid}) is still shutting down; check the log`));
     });
 
   try {
