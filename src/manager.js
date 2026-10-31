@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import pty from 'node-pty';
 import { expandHome, paths } from './config.js';
@@ -194,6 +195,9 @@ function loadScrollback(id) {
   }
 }
 const baseLabel = ({ ref, sha }) => `${ref} @ ${sha.slice(0, 9)}`;
+
+/** The id of the machine terminal's shells (agent ids are hex, so it can't clash). */
+export const MACHINE = '__machine__';
 
 export class AgentManager extends EventEmitter {
   constructor({ store, config, plugins = new Plugins() }) {
@@ -1354,7 +1358,8 @@ export class AgentManager extends EventEmitter {
 
   /** Start (if needed) login shell number `n` in the agent's folder, for running commands by hand. */
   openShell(ref, n = 1) {
-    const agent = this.mustGet(ref);
+    // The machine terminal: a shell in the home folder, not tied to any agent.
+    const agent = ref === MACHINE ? { id: MACHINE, workdir: os.homedir(), machine: true } : this.mustGet(ref);
     const shells = this.shellsOf(agent.id);
     const prev = shells.get(n);
     if (prev?.pty) return prev;
@@ -1375,7 +1380,7 @@ export class AgentManager extends EventEmitter {
       cols: rt.cols,
       rows: rt.rows,
       cwd: agent.workdir,
-      env: this.childEnv(agent),
+      env: this.childEnv(agent.machine ? null : agent),
     });
     rt.pty = proc;
     shells.set(n, rt);
@@ -1390,7 +1395,7 @@ export class AgentManager extends EventEmitter {
       const a = this.store.get(agent.id);
       if (a) this.changed(a);
     });
-    this.changed(agent);
+    if (!agent.machine) this.changed(agent);
     return rt;
   }
 
@@ -1403,8 +1408,8 @@ export class AgentManager extends EventEmitter {
   }
 
   attachShell(ref, client, n = 1) {
-    const agent = this.mustGet(ref);
-    this.plugins.check('terminal.open', { agent: this.auditView(agent), kind: `shell:${n}` });
+    const agent = ref === MACHINE ? { id: MACHINE } : this.mustGet(ref);
+    this.plugins.check('terminal.open', ref === MACHINE ? { agent: null, kind: 'machine' } : { agent: this.auditView(agent), kind: `shell:${n}` });
     const rt = this.openShell(agent.id, n);
     rt.clients.add(client);
     return {

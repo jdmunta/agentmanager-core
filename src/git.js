@@ -7,7 +7,7 @@ const baseEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: '0' });
 
 const cancelled = () => Object.assign(new Error('Cancelled'), { cancelled: true });
 
-export function run(cmd, args, { cwd, timeout = 60_000, signal, env } = {}) {
+export function run(cmd, args, { cwd, timeout = 60_000, signal, env, trim = true } = {}) {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, { cwd, timeout, signal, env: { ...baseEnv(), ...env }, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
@@ -15,7 +15,7 @@ export function run(cmd, args, { cwd, timeout = 60_000, signal, env } = {}) {
         err.message = `${cmd} ${args.join(' ')} failed: ${(stderr || err.message).trim()}`;
         reject(err);
       } else {
-        resolve(stdout.trim());
+        resolve(trim ? stdout.trim() : stdout);
       }
     });
   });

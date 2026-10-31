@@ -21,6 +21,7 @@ import { notInstalled } from '../src/engines/index.js';
 import { Cleanup, cleanupSettings } from '../src/cleanup.js';
 import { checkUpdate, gitBlocker, installUpdate, newestTag } from '../src/update.js';
 import { claudeAccount } from '../src/identity.js';
+import { isText, languageOf, resolveInside } from '../src/studio.js';
 import { commentsMessage, parseBaseRef, prBase } from '../src/review.js';
 import { parseDiff } from '../public/review.js';
 import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
@@ -984,4 +985,20 @@ test('identity: the Claude account from its settings file, nothing else', () => 
   fs.writeFileSync(f, '{}');
   assert.equal(claudeAccount(f), null);
   assert.equal(claudeAccount(`${f}.missing`), null);
+});
+
+test('studio: paths stay inside the folder; languages by file name', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'am-studio-'));
+  fs.mkdirSync(path.join(root, 'a'));
+  const real = fs.realpathSync(root);
+  assert.equal(resolveInside(root, 'a/b.txt'), path.join(real, 'a', 'b.txt'));
+  assert.equal(resolveInside(root, '/a'), path.join(real, 'a'));
+  assert.throws(() => resolveInside(root, 'a/../../x'), /\.\./);
+  fs.symlinkSync(os.tmpdir(), path.join(root, 'out'));
+  assert.throws(() => resolveInside(root, 'out/x'), /outside/);
+  fs.symlinkSync(path.join(root, 'a'), path.join(root, 'in'));
+  assert.ok(resolveInside(root, 'in/x').endsWith(path.join('in', 'x')), 'a link inside the folder is fine');
+  assert.deepEqual(['x.ts', 'Dockerfile', 'a.py', 'b.unknown', 'c.YML'].map(languageOf), ['typescript', 'dockerfile', 'python', 'plaintext', 'yaml']);
+  assert.equal(isText(Buffer.from('hello')), true);
+  assert.equal(isText(Buffer.from([104, 0, 105])), false);
 });

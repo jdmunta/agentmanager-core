@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { ensureHome, HOST, loadConfig, paths, PORT, saveConfig } from './config.js';
-import { AgentManager, shellNumber } from './manager.js';
+import { AgentManager, MACHINE, shellNumber } from './manager.js';
 import { Backlog } from './backlog.js';
 import { Races } from './races.js';
 import { Review } from './review.js';
@@ -20,6 +21,7 @@ import { stats } from './stats.js';
 import { Playbooks } from './playbooks.js';
 import { Updates } from './update.js';
 import { identity } from './identity.js';
+import { Studio } from './studio.js';
 import { Memory } from './memory.js';
 import { doctor } from './doctor.js';
 import { Triggers, tokenMatches } from './triggers.js';
@@ -57,7 +59,7 @@ function isAllowedOrigin(origin, port) {
 }
 
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|update(\/|$)|shutdown$)/;
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|update(\/|$)|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
 
@@ -71,6 +73,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const backlog = new Backlog({ manager, store, config });
   const races = new Races({ manager, store });
   const review = new Review({ manager });
+  const studio = new Studio({ manager, review });
   const teams = new Teams({ manager, store, config });
   const cleanup = new Cleanup({ manager, store, config, teams });
   const landing = new Landing({ manager, store, config });
@@ -236,6 +239,23 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/agents/:id/plan/changes', wrap((req) => manager.requestPlanChanges(req.params.id, req.body?.note)));
   api.post('/agents/:id/plan/review', wrap((req) => manager.setPlanReview(req.params.id, req.body?.on === true)));
   api.post('/agents/:id/handoff', wrap((req) => manager.maybeHandoff(manager.mustGet(req.params.id).id, { force: true })));
+  // ---------------------------------------------------------- studio: files and editor
+  api.get('/agents/:id/files', wrap((req) => studio.list(req.params.id, req.query.dir ?? '')));
+  api.post('/agents/:id/files', wrap((req) => studio.create(req.params.id, req.body?.path, req.body?.type)));
+  api.post('/agents/:id/files/rename', wrap((req) => studio.rename(req.params.id, req.body?.from, req.body?.to)));
+  api.get('/agents/:id/file', wrap((req) => studio.read(req.params.id, req.query.path)));
+  api.put('/agents/:id/file', wrap((req) => studio.write(req.params.id, req.body?.path, req.body?.content, { mtimeMs: req.body?.mtimeMs ?? null, force: Boolean(req.body?.force) })));
+  api.delete('/agents/:id/file', wrap((req) => studio.remove(req.params.id, req.query.path)));
+  api.get('/agents/:id/file/original', wrap((req) => studio.original(req.params.id, req.query.path)));
+  api.get('/agents/:id/search', wrap((req) => studio.search(req.params.id, req.query.q)));
+  // Opening VS Code or Cursor happens on this computer, so only from it.
+  api.get('/editors', wrap(() => studio.editors()));
+  api.post('/agents/:id/open-in', wrap((req) => studio.openIn(req.params.id, req.body?.editor, req.body?.path ?? null)));
+  // The machine terminal: shells in the home folder, not tied to an agent (Open Terminal).
+  api.get('/machine/shells', wrap(() => ({ shells: manager.shellNumbers(MACHINE), home: os.homedir() })));
+  api.post('/machine/shell/new', wrap(() => ({ n: manager.nextShellNumber(MACHINE) })));
+  api.post('/machine/shell/close', wrap((req) => manager.closeShell(MACHINE, req.body?.n ? Number(req.body.n) : undefined)));
+  api.post('/machine/shell/drop', wrap((req) => manager.dropShell(MACHINE, Number(req.body?.n) || 1)));
   api.post('/agents/:id/shell/close', wrap((req) => manager.closeShell(req.params.id, req.body?.n ? Number(req.body.n) : undefined)));
   api.post('/agents/:id/shell/new', wrap((req) => ({ n: manager.nextShellNumber(manager.mustGet(req.params.id).id) })));
   api.post('/agents/:id/shell/drop', wrap((req) => manager.dropShell(req.params.id, Number(req.body?.n) || 1)));
@@ -666,14 +686,17 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   });
 
   const termKind = (q) => (shellNumber(q) ? `shell:${shellNumber(q)}` : 'claude');
+  // The machine terminal (Open Terminal) has no agent: its shells live under MACHINE.
+  const termAgent = (id) => (id === MACHINE ? { id: MACHINE } : manager.mustGet(id));
   const attachTerm = (id, kind, client) =>
     shellNumber(kind) ? manager.attachShell(id, client, shellNumber(kind)) : manager.attach(id, client);
   api.get('/agents/:id/term/stream', (req, res) => {
     let agent;
     const kind = termKind(req.query.kind);
     try {
-      agent = manager.mustGet(req.params.id);
-      manager.plugins.check('terminal.open', { agent: manager.auditView(agent), kind });
+      agent = termAgent(req.params.id);
+      if (agent.id === MACHINE) manager.plugins.check('terminal.open', { agent: null, kind: 'machine' });
+      else manager.plugins.check('terminal.open', { agent: manager.auditView(agent), kind });
     } catch (err) {
       return res.status(err.status || 404).json({ error: err.message });
     }
@@ -714,7 +737,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post(
     '/agents/:id/term/input',
     wrap((req) => {
-      const agent = manager.mustGet(req.params.id);
+      const agent = termAgent(req.params.id);
       if (typeof req.body?.d !== 'string') throw fail(400, 'd (string) is required');
       manager.write(agent.id, req.body.d, termKind(req.body.kind));
       return { ok: true };
@@ -723,7 +746,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post(
     '/agents/:id/term/resize',
     wrap((req) => {
-      const agent = manager.mustGet(req.params.id);
+      const agent = termAgent(req.params.id);
       manager.resize(agent.id, req.body?.cols | 0, req.body?.rows | 0, termKind(req.body?.kind));
       return { ok: true };
     }),
@@ -795,12 +818,13 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     if (!m) return ws.close(1008, 'unknown endpoint');
     let session;
     try {
-      const agent = manager.mustGet(m[1]);
+      // The machine terminal has no agent; its shells live under MACHINE.
+      const agent = m[1] === MACHINE ? { id: MACHINE } : manager.mustGet(m[1]);
       const client = {
         send: (msg) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(msg)),
         close: () => ws.close(1000, 'agent removed'),
       };
-      const kind = termKind(url.searchParams.get('kind'));
+      const kind = agent.id === MACHINE ? `shell:${shellNumber(url.searchParams.get('kind')) || 1}` : termKind(url.searchParams.get('kind'));
       session = attachTerm(agent.id, kind, client);
       client.send({ t: 'hello', id: agent.id, kind, running: session.running, backlog: session.backlog });
       ws.on('message', (raw) => {

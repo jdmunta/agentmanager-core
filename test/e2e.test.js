@@ -3431,3 +3431,78 @@ test('settings: who this runs as, release checks, and a cap on open agents', asy
     assert.equal((await call('PUT', '/cleanup', { maxRunning: null })).body.maxRunning, null);
   }
 });
+
+test("studio: browse, edit, search and compare an agent's files, never outside its folder", async () => {
+  const repo = path.join(home, 'studio-repo');
+  fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'src', 'app.js'), 'export const answer = 41;\n');
+  fs.writeFileSync(path.join(repo, 'README.md'), '# Studio\n');
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init'], { cwd: repo });
+  const [a] = (await call('POST', '/agents', { intent: 'Studio host', dir: repo, start: false })).body;
+  const ready = await waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? agentNow(a.id) : null));
+  const dir = ready.workdir;
+
+  // The tree: folders first, .git listed but marked hidden.
+  const top = (await call('GET', `/agents/${a.id}/files`)).body;
+  assert.deepEqual(top.entries.filter((e) => !e.hidden).map((e) => [e.name, e.type]), [['src', 'dir'], ['README.md', 'file']]);
+  assert.equal((await call('GET', `/agents/${a.id}/files?dir=src`)).body.entries[0].path, 'src/app.js');
+
+  // Read, then save; a save based on an old copy is refused unless forced.
+  const file = (await call('GET', `/agents/${a.id}/file?path=src/app.js`)).body;
+  assert.equal(file.content, 'export const answer = 41;\n');
+  assert.equal(file.language, 'javascript');
+  const saved = await call('PUT', `/agents/${a.id}/file`, { path: 'src/app.js', content: 'export const answer = 42;\n', mtimeMs: file.mtimeMs });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(fs.readFileSync(path.join(dir, 'src', 'app.js'), 'utf8'), 'export const answer = 42;\n');
+  const stale = await call('PUT', `/agents/${a.id}/file`, { path: 'src/app.js', content: 'mine\n', mtimeMs: file.mtimeMs - 5000 });
+  assert.equal(stale.status, 409);
+  assert.match(stale.body.error, /changed on disk/);
+
+  // The original (where the agent started) for a diff.
+  const orig = (await call('GET', `/agents/${a.id}/file/original?path=src/app.js`)).body;
+  assert.equal(orig.content, 'export const answer = 41;\n', 'trailing newline kept');
+
+  // Create, rename, delete; search finds the edit.
+  assert.equal((await call('POST', `/agents/${a.id}/files`, { path: 'src/new/util.js' })).status, 200);
+  assert.equal((await call('POST', `/agents/${a.id}/files`, { path: 'src/new/util.js' })).status, 409);
+  assert.equal((await call('POST', `/agents/${a.id}/files/rename`, { from: 'src/new/util.js', to: 'src/util.js' })).status, 200);
+  assert.ok(fs.existsSync(path.join(dir, 'src', 'util.js')));
+  assert.equal((await call('DELETE', `/agents/${a.id}/file?path=src/util.js`)).status, 200);
+  assert.ok(!fs.existsSync(path.join(dir, 'src', 'util.js')));
+  const found = (await call('GET', `/agents/${a.id}/search?q=answer = 42`)).body;
+  assert.deepEqual(found.hits.map((h) => [h.path, h.line]), [['src/app.js', 1]]);
+
+  // Outside the folder: refused, by "..", absolute path or a symlink.
+  assert.equal((await call('GET', `/agents/${a.id}/file?path=../../etc/hosts`)).status, 400);
+  fs.symlinkSync(os.tmpdir(), path.join(dir, 'escape'));
+  assert.equal((await call('GET', `/agents/${a.id}/files?dir=escape`)).status, 403);
+  assert.equal((await call('PUT', `/agents/${a.id}/file`, { path: 'escape/x.txt', content: 'no' })).status, 403);
+  assert.equal((await call('GET', `/agents/${a.id}/file?path=/etc/hosts`)).status, 404, 'an absolute path is taken inside the folder');
+  assert.equal((await call('DELETE', `/agents/${a.id}/file?path=`)).status, 400);
+  fs.rmSync(path.join(dir, 'escape'));
+
+  // Editors on this machine (none need be installed), and open-in is local only.
+  assert.ok(Array.isArray((await call('GET', '/editors')).body));
+});
+
+test('Open Terminal: a shell in the home folder, not tied to an agent', async () => {
+  const n = (await call('POST', '/machine/shell/new')).body.n;
+  assert.equal(n, 1);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/term/__machine__?kind=shell:${n}`);
+  let out = '';
+  ws.on('message', (m) => {
+    const msg = JSON.parse(m.toString());
+    if (msg.t === 'o') out += msg.d;
+  });
+  await new Promise((r) => ws.on('open', r));
+  ws.send(JSON.stringify({ t: 'i', d: 'echo "here=$(pwd -P) sum=$((40+2))"\r' }));
+  await waitFor(() => out.includes('sum=42'));
+  assert.ok(out.includes(`here=${fs.realpathSync(os.homedir())}`));
+  assert.deepEqual((await call('GET', '/machine/shells')).body.shells, [1]);
+  assert.ok(!(await call('GET', '/agents')).body.some((x) => x.id === '__machine__'), 'not listed as an agent');
+  await call('POST', '/machine/shell/drop', { n: 1 });
+  await waitFor(async () => (await call('GET', '/machine/shells')).body.shells.length === 0);
+  ws.close();
+});

@@ -56,7 +56,8 @@ Policies are synchronous so every code path can call them. Keep them fast; do sl
 | `agent.commit` | Before Commit in the review screen commits an agent's worktree | `agent`, `message` |
 | `agent.pr` | Before the review screen pushes an agent's branch and opens a pull request | `agent`, `title`, `draft` |
 | `agent.merge` | Before Merge (or auto-merge) in the Land tab merges an agent's pull request | `agent`, `url`, `method`, `auto` |
-| `terminal.open` | Before a live terminal is attached (browser, CLI `attach`, hub) | `agent`, `kind` (`claude` or `shell:N`) |
+| `terminal.open` | Before a live terminal is attached (browser, CLI `attach`, hub) | `agent`, `kind` (`claude` or `shell:N`); for **Open Terminal** (a shell on the machine, not tied to an agent) `agent` is null and `kind` is `machine` |
+| `agent.files` | Before the studio changes a file in an agent's folder | `agent`, `op` (`write`, `create`, `rename` or `delete`), `path`, and `to` for a rename |
 | `hub.action` | Before an action the hub asked for, after this machine's own `hub.allow` check | `action`, `agent` |
 
 `agent` is a summary: id, name, kind, engine, intent, repo, workdir, branch, permissionMode, model, project, status.

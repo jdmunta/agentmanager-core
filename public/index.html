@@ -24,6 +24,7 @@
         <input id="filter" type="search" placeholder="Filter agents" aria-label="Filter agents" />
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
         <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
+        <button id="machine-btn" title="A terminal on this computer (your home folder), from any device you're signed in on">Terminal</button>
         <button id="ask-btn" title="A general Claude session with no repo or folder">Ask Claude</button>
         <button id="new-btn" class="primary">+ New agents</button>
         <div class="menu-wrap">
@@ -84,6 +85,7 @@
           <div class="term-bar">
             <div class="term-tabs" role="tablist">
               <button class="term-tab" data-kind="claude" role="tab">Claude</button>
+              <button class="term-tab" data-kind="code" role="tab" title="The agent's files: browse, edit, search and compare (Monaco, the editor in VS Code)">Code</button>
               <span id="shell-tabs" class="term-tabs"></span>
               <button class="term-tab term-add" id="shell-new" title="Open another shell in the agent's folder">+ Shell</button>
               <span id="browser-tabs" class="term-tabs"></span>
@@ -100,6 +102,7 @@
           </div>
           <div id="signin-bar" class="signin-bar" hidden></div>
           <div id="terminal" class="terminal"></div>
+          <div id="code" class="code"></div>
           <div id="browser" class="browser">
             <form id="browser-bar" class="browser-bar" autocomplete="off">
               <button type="button" id="browser-back" class="ghost small live-only" title="Back">◀</button>
@@ -684,6 +687,17 @@
           <button type="submit" class="primary">Save</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="machine-dialog" class="machine-dialog">
+      <div class="term-bar">
+        <div class="term-tabs" id="machine-tabs" role="tablist"></div>
+        <button class="term-tab term-add" id="machine-new" title="Open another terminal">+ Terminal</button>
+        <span id="machine-title" class="hint"></span>
+        <span class="spacer"></span>
+        <button id="machine-close" class="ghost small" title="Hide (the shells keep running)">Hide</button>
+      </div>
+      <div id="machine-term" class="terminal"></div>
     </dialog>
 
     <script type="module" src="/app.js"></script>

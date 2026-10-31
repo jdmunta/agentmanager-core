@@ -12,6 +12,8 @@ import { initPlaybooks } from '/playbooks.js';
 import { initSetup } from '/setup.js';
 import { initUpdate } from '/update.js';
 import { initMenu } from '/menu.js';
+import { initCode } from '/code.js';
+import { initMachine } from '/machine.js';
 
 const $ = (sel) => document.querySelector(sel);
 const agents = new Map();
@@ -32,7 +34,7 @@ const ticketHash = location.hash.match(/(?:^#|&)ticket=([\w-]+)/)?.[1] ?? null;
 const goHash = ticketHash ? decodeURIComponent(location.hash.match(/(?:^#|&)go=([^&]*)/)?.[1] ?? '') : '';
 const [hashId, hashView] = loginHash ? [null, null] : (ticketHash ? goHash : location.hash.slice(1)).split('/');
 let selectedId = hashId || null;
-let openTermOnLoad = hashView === 'term' || isShell(hashView) || isBrowser(hashView);
+let openTermOnLoad = hashView === 'term' || hashView === 'code' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
 // "Only agents created in the last N days": remembered in this browser.
 const recent = (() => {
@@ -107,6 +109,8 @@ initSpend({ api, esc, toast, $ });
 initSetup({ api, esc, $ });
 const updateUi = initUpdate({ api, esc, toast, $ });
 initMenu({ api, esc, toast, $ });
+initMachine({ api, esc, toast, $, Terminal, FitAddon });
+const codeUi = initCode({ api, esc, toast, $, agents, isOpen: () => term.kind === 'code' });
 const playbooksUi = initPlaybooks({ api, esc, toast, $, select: (id) => (showTab('agents'), select(id)) });
 $('#new-playbook').onclick = () => {
   const f = $('#new-form');
@@ -1801,6 +1805,8 @@ const term = {
   shellExited: false,
 
   open(id, kind = 'claude') {
+    if (kind === 'code') return this.openCode(id);
+    $('#term-wrap').classList.remove('coding');
     if (isBrowser(kind)) return this.openBrowser(id, kind);
     liveView.close();
     $('#term-wrap').classList.remove('browsing');
@@ -1860,6 +1866,10 @@ const term = {
 
   syncOverlay() {
     if (isBrowser(this.kind)) return this.renderTabs();
+    if (this.kind === 'code') {
+      $('#term-overlay').hidden = true;
+      return this.renderTabs();
+    }
     const a = this.agentId && agents.get(this.agentId);
     const shell = isShell(this.kind);
     const closed = shell ? this.shellExited : a && !a.runtime.running && a.status !== 'preparing';
@@ -1899,6 +1909,24 @@ const term = {
 
   // Browser tabs: one iframe per tab, kept while the panel is open so switching back doesn't reload it.
   frames: new Map(), // "<agent>:<n>" -> iframe
+
+  // Code: the agent's files in an editor, in place of the terminal (like a browser tab).
+  openCode(id) {
+    history.replaceState(null, '', `#${id}/code`);
+    liveView.close();
+    $('#term-wrap').hidden = false;
+    $('#detail').classList.add('with-term');
+    $('#term-wrap').classList.remove('browsing');
+    $('#term-wrap').classList.add('coding');
+    this.ensure();
+    this.disconnect();
+    this.agentId = id;
+    this.kind = 'code';
+    $('#term-overlay').hidden = true;
+    this.renderTabs();
+    $('#term-title').textContent = agents.get(id)?.workdir ?? '';
+    codeUi.open(id);
+  },
 
   openBrowser(id, kind) {
     history.replaceState(null, '', `#${id}/${kind}`);
@@ -3377,7 +3405,7 @@ function handleEvent(msg) {
     msg.agents.forEach(watchDocs);
     if (selectedId && !agents.has(selectedId)) selectedId = null;
     if (openTermOnLoad && selectedId) {
-      if (isShell(hashView) || isBrowser(hashView)) term.open(selectedId, hashView);
+      if (isShell(hashView) || isBrowser(hashView) || hashView === 'code') term.open(selectedId, hashView);
       else if (agents.get(selectedId).runtime.running) term.open(selectedId);
     }
     openTermOnLoad = false;
