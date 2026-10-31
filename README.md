@@ -439,6 +439,17 @@ The sidebar groups agents into projects, shown as a tree:
 - **Ordering.** Projects needing you sort first. Collapsed projects stay collapsed.
 - **CLI.** `agentmgr ls` groups by project too.
 
+### Editing and moving agents
+
+**Edit** on an agent changes its name, its request, priority, permission mode and model. Changing the request updates what AI Agent Manager records (and tracks any new Jira links); tick **Also tell the agent** to send it to the session as well. Permission mode and model apply from its next launch.
+
+To list an agent under another project, use **✎ Move** next to its project (or the Edit dialog) and pick a known project, a new project name, or **Its own repo or folder** to move it back. Only the grouping changes: its code stays in its own worktree and branch.
+
+```bash
+agentmgr edit 3fa2b1 --name login-timeout --priority P1 --intent "Fix the login timeout on slow networks" --tell
+agentmgr move 3fa2b1 @billing        # "" moves it back to its own project
+```
+
 ## Backlog
 
 Queue asks instead of starting them. Use **+ Add** in the Backlog tab, **Queue in backlog** in the New agents dialog, or `agentmgr backlog add`. Each item is one ask, plus where to do it (repo or folder, base branch, project) and a priority from P1 (high) to P3 (low).

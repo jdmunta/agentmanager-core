@@ -401,6 +401,35 @@
       </form>
     </dialog>
 
+    <dialog id="edit-dialog">
+      <form id="edit-form" method="dialog" class="alerts-body">
+        <h2>Edit agent</h2>
+        <label>Name <input name="name" required maxlength="80" /></label>
+        <label>Request <span class="hint">what the agent was asked to do</span>
+          <textarea name="intent" rows="4"></textarea>
+        </label>
+        <label class="check" id="edit-tell-row"><input type="checkbox" name="tell" /> Also tell the agent about the changed request</label>
+        <label id="edit-project-row">Project
+          <select name="project"></select>
+        </label>
+        <label id="edit-newproject-row" hidden>New project name <input name="newProject" maxlength="60" /></label>
+        <div class="row three">
+          <label>Priority
+            <select name="priority"><option value="0">P0 urgent</option><option value="1">P1 high</option><option value="2">P2 normal</option><option value="3">P3 low</option></select>
+          </label>
+          <label>Permission mode <select name="permissionMode"></select></label>
+          <label>Model <input name="model" placeholder="as configured" /></label>
+        </div>
+        <p class="hint" id="edit-hint">Moving changes only where the agent is listed; its code stays in its own repo and branch. Permission mode and model apply from its next launch.</p>
+        <p id="edit-error" class="error" hidden></p>
+        <div class="dialog-actions">
+          <span class="spacer"></span>
+          <button type="button" id="edit-close" class="ghost">Cancel</button>
+          <button class="primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="assistant-dialog">
       <form id="assistant-form" method="dialog" class="alerts-body">
         <h2>Assistant</h2>

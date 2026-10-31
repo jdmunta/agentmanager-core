@@ -1564,6 +1564,7 @@ function renderDetail() {
         <button data-act="fresh" ${running || a.status === 'preparing' ? 'disabled' : ''} title="Start over with a new session ID (old ones are kept)">New session</button>
         <button data-act="shell" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="A separate terminal in this agent's folder for running commands by hand">Open shell</button>
         <button data-act="fork" ${a.workdir && a.git?.branch ? '' : 'disabled'} title="A new agent with this one's code and conversation, in its own worktree, to try another approach">Fork</button>
+        <button data-act="edit" title="Change its name, request, project, priority, permission mode or model">Edit</button>
         <button data-act="refresh" title="Re-scan git, PRs and transcripts">Refresh</button>
         <button data-act="keep" class="${a.keep ? 'on' : ''}" title="${a.keep ? 'Kept: clean up never closes or deletes it. Click to let clean up handle it again' : 'Clean up never closes or deletes an agent marked Keep'}">${a.keep ? '📌 Kept' : 'Keep'}</button>
         <button class="danger" data-act="delete">Delete</button>
@@ -1628,7 +1629,7 @@ function renderDetail() {
         <h3>Workspace</h3>
         <dl class="kv">
           <dt>Folder</dt><dd><code>${esc(a.workdir ?? (a.status === 'preparing' ? 'preparing…' : '—'))}</code>${a.workdir ? copyBtn(a.workdir) : ''}</dd>
-          <dt>Project</dt><dd>${esc(a.projectInfo?.full || a.projectInfo?.name || '—')} <button class="link" data-act="project" title="Group this agent under a different project name">✎</button></dd>
+          <dt>Project</dt><dd>${esc(a.projectInfo?.full || a.projectInfo?.name || '—')} ${noRepo(a) ? '' : '<button class="link" data-act="project" title="Move this agent under another project">✎ Move</button>'}</dd>
           <dt>Repo</dt><dd>${a.repo ? `<code>${esc(a.repo)}</code>` : '—'}</dd>
           <dt>Branch</dt><dd>${a.git?.branch ? `<code>${esc(a.git.branch)}</code>` : '—'}${a.git?.dirtyFiles ? ` <span class="tag">${a.git.dirtyFiles} changed</span>` : ''}</dd>
           <dt>Head</dt><dd>${a.git?.head ? `<code>${esc(a.git.head.sha)}</code> ${esc(a.git.head.subject)}` : '—'}</dd>
@@ -2877,12 +2878,10 @@ $('#detail-body').addEventListener('click', async (e) => {
         term.open(a.id);
       }, 'Moved into the repository');
       break;
-    case 'project': {
-      const name = prompt('Project name for this agent (leave empty to use its repo):', a.project ?? a.projectInfo?.name ?? '');
-      if (name === null) return;
-      act(async () => upsert(await api('PATCH', `/agents/${a.id}`, { project: name })));
-      break;
-    }
+    case 'project':
+      return openEdit(a, 'project');
+    case 'edit':
+      return openEdit(a);
     case 'plan-open':
       return openPlan(a.id);
     case 'plan-on':
@@ -3503,6 +3502,78 @@ $('#cleanup-plan').addEventListener('click', (e) => {
   e.preventDefault();
   $('#cleanup-dialog').close();
   select(go.dataset.cleanupGoto);
+});
+
+// ------------------------------------------------------------------ edit an agent
+
+let editing = null;
+let enginesCache = null;
+// The project picked in the dialog: "" while it is listed under its own repo or folder.
+const editProject = (a) => (a.projectMove || a.project ? (a.projectInfo?.shortcut ?? '') : '');
+
+async function openEdit(a, focus) {
+  editing = a;
+  const f = $('#edit-form');
+  f.name.value = a.name;
+  f.intent.value = a.intent ?? '';
+  f.tell.checked = false;
+  f.priority.value = String(a.priority ?? 2);
+  f.model.value = a.model ?? '';
+  $('#edit-project-row').hidden = noRepo(a);
+  $('#edit-tell-row').hidden = !a.intent;
+  // Its own repo or folder, every known project, or a new name.
+  f.project.innerHTML = [
+    '<option value="">Its own repo or folder</option>',
+    ...projectsState.map((p) => `<option value="${esc(p.shortcut)}">${esc(p.name)} (@${esc(p.shortcut)})</option>`),
+    '<option value="__new">New project name…</option>',
+  ].join('');
+  f.project.value = editProject(a);
+  $('#edit-newproject-row').hidden = true;
+  f.newProject.value = '';
+  enginesCache ??= await api('GET', '/engines').catch(() => []);
+  const modes = enginesCache.find((e) => e.id === (a.engine ?? 'claude'))?.permissionModes ?? [];
+  f.permissionMode.innerHTML = ['<option value="">As configured</option>', ...modes.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`)].join('');
+  f.permissionMode.value = a.permissionMode ?? '';
+  $('#edit-error').hidden = true;
+  $('#edit-dialog').showModal();
+  (focus === 'project' ? f.project : f.name).focus();
+}
+
+$('#edit-form').project.addEventListener('change', (e) => {
+  $('#edit-newproject-row').hidden = e.target.value !== '__new';
+  if (e.target.value === '__new') $('#edit-form').newProject.focus();
+});
+$('#edit-close').onclick = () => $('#edit-dialog').close();
+$('#edit-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const a = editing;
+  const f = e.target;
+  const patch = {};
+  if (f.name.value.trim() !== a.name) patch.name = f.name.value.trim();
+  if (f.intent.value.trim() !== (a.intent ?? '')) patch.intent = f.intent.value.trim();
+  if (Number(f.priority.value) !== (a.priority ?? 2)) patch.priority = Number(f.priority.value);
+  if ((f.permissionMode.value || null) !== (a.permissionMode ?? null)) patch.permissionMode = f.permissionMode.value || null;
+  if ((f.model.value.trim() || null) !== (a.model ?? null)) patch.model = f.model.value.trim() || null;
+  if (!noRepo(a)) {
+    const target = f.project.value === '__new' ? f.newProject.value.trim() : f.project.value;
+    const was = editProject(a);
+    if (f.project.value === '__new' && !target) {
+      $('#edit-error').textContent = 'Give the new project a name';
+      $('#edit-error').hidden = false;
+      return;
+    }
+    if (target !== was) patch.project = target;
+  }
+  try {
+    if (Object.keys(patch).length) upsert(await api('PATCH', `/agents/${a.id}`, patch));
+    if (patch.intent && f.tell.checked) await api('POST', `/agents/${a.id}/tell`, { text: `The request changed. It is now:\n${patch.intent}` });
+    $('#edit-dialog').close();
+    const relaunch = 'permissionMode' in patch || 'model' in patch;
+    toast(!Object.keys(patch).length ? 'Nothing changed' : `Saved${patch.project !== undefined ? '; moved' : ''}${relaunch ? '. Permission mode and model apply from its next launch' : ''}`);
+  } catch (err) {
+    $('#edit-error').textContent = err.message;
+    $('#edit-error').hidden = false;
+  }
 });
 
 // ------------------------------------------------------------------ assistant
