@@ -2058,8 +2058,7 @@ test('assistant: always-on session, check now, its agents marked, daily cap, one
   assert.equal(a.kind, 'assistant');
   assert.equal(a.projectInfo.name, 'Assistant');
   assert.equal(fs.realpathSync(a.workdir), fs.realpathSync(path.join(home, 'assistant')));
-  const real = (d) => (fs.existsSync(d) ? fs.realpathSync(d) : d);
-  const launch = launches().filter((l) => real(l.cwd) === real(a.workdir)).at(-1);
+  const launch = await waitFor(() => launches().filter((l) => l.args.includes(a.sessionId)).at(-1), 10000, 'the assistant launched');
   const prompt = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
   assert.match(prompt, /You are the person's assistant/);
   assert.match(prompt, /Jira project OPS is the assistant-work folder/);
