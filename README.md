@@ -893,6 +893,13 @@ Usage comes from the session transcripts and is refreshed every few seconds whil
 - **Where it shows.** Per session in **Session history** and `agentmgr sessions`, and summed per agent in the list, the session card, `agentmgr ls` (TOKENS) and `agentmgr show`.
 - **Cost.** The figure Claude Code records itself (`cost-state`), shown once it has written one.
 
+## Studio: code and terminals
+
+- **Code** (a tab next to **Claude** in the terminal pane) opens the agent's folder: a file tree, tabs, and Monaco, the editor inside VS Code, with syntax highlighting and search within a file. **Save** (Ctrl/Cmd+S) writes into the agent's folder. If the agent changed the file since you opened it, you're asked before anything is overwritten. Files you haven't edited pick up the agent's changes as it makes them. **Search** finds text across the folder (git grep, so ignored files are skipped). **Diff** compares the file with where the agent started, side by side, and you can edit on the right. **＋ / ▣ / ✎ / 🗑** create, rename and delete. Every path stays inside the agent's folder: `..`, and links that point outside, are refused.
+- **VS Code / Cursor** opens the agent's folder (and the open file) in the editor installed on this computer. The buttons show when its `code` or `cursor` command is found.
+- Monaco loads from the jsDelivr CDN the first time you open **Code**. Offline, a plain text editor takes its place.
+- **Terminal** in the top bar opens a shell on this computer in your home folder, not tied to any agent. It works from any device you're signed in on, so you can run any command from your phone. **+ Terminal** opens more. They keep running when hidden; **×** ends one. Plugins can refuse it with the `terminal.open` policy (`kind: "machine"`).
+
 ## Shell and general sessions
 
 - **Open shell** (or `agentmgr shell <agent>`) starts `$SHELL -l` in the agent's working folder. It shows as a **Shell 1** tab next to the **Claude** tab in the terminal pane; **+ Shell** (or `agentmgr shell <agent> -n 2`) opens more, and **×** on a tab closes that shell. Shells live as long as the daemon and don't start Claude.
