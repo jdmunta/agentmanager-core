@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Assistant:** an always-on session that works on your behalf. Every few minutes it checks Jira (new assignments, comments and mentions), GitHub (review requests, failing checks on your PRs) and Slack with its own tools, and starts agents for new work, or passes the news to the agent already on it. The daemon enforces a daily cap, a cap on its running agents and one agent per Jira key; agents it starts are marked **by assistant**, and Slack alerts can announce them. **Assistant** in the top bar, or `agentmgr assistant`.
 - **Project names** in the agent list are larger and bold, so they stand out from the agents under them.
 
 ## 1.1.0 (2026-10-30)

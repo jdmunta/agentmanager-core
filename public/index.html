@@ -22,6 +22,7 @@
       </div>
       <div class="top-actions">
         <input id="filter" type="search" placeholder="Filter agents" aria-label="Filter agents" />
+        <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
         <button id="cleanup-btn" title="Close agents idle for a while, and delete old closed ones">Clean up</button>
         <button id="alerts-btn" class="local-only" title="Slack alerts when an agent needs you">Alerts</button>
         <button id="remote-btn" class="local-only" title="Open AI Agent Manager from your phone">Remote access</button>
@@ -383,6 +384,7 @@
           <label class="check"><input type="checkbox" name="ev_stuck" /> seems stuck (same failure, undoing its edits, no progress)</label>
           <label class="check"><input type="checkbox" name="ev_conflict" /> changes the same files as another agent</label>
           <label class="check"><input type="checkbox" name="ev_question" /> asks a question in the inbox</label>
+          <label class="check"><input type="checkbox" name="ev_assistant" /> is started by the assistant for new work</label>
           <label class="check"><input type="checkbox" name="ev_waiting" /> finished its turn and is idle after <input name="waitingDelaySec" type="number" min="0" class="num" />s</label>
           <label class="check"><input type="checkbox" name="skipWhenWatching" /> not while I have its terminal open</label>
           <label class="check"><input type="checkbox" name="includeIntent" /> include the intent text in the message</label>
@@ -395,6 +397,41 @@
           <span class="spacer"></span>
           <button type="button" id="alerts-close" class="ghost">Close</button>
           <button class="primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="assistant-dialog">
+      <form id="assistant-form" method="dialog" class="alerts-body">
+        <h2>Assistant</h2>
+        <p class="hint">An always-on Claude session that works on your behalf. Every few minutes it checks for new work with its own Jira, GitHub and Slack tools, and starts an agent for each new item, or passes news to the agent already on it. It never merges, approves, comments or sends messages as you.</p>
+        <div id="assistant-status" class="assistant-status"></div>
+        <fieldset>
+          <legend>Watch</legend>
+          <label class="check"><input type="checkbox" name="src_jira" /> Jira issues newly assigned to me</label>
+          <label class="check"><input type="checkbox" name="src_comments" /> New comments and mentions on my Jira issues (passed to the agent on it)</label>
+          <label class="check"><input type="checkbox" name="src_reviews" /> GitHub pull requests waiting for my review</label>
+          <label class="check"><input type="checkbox" name="src_ci" /> Failing checks on my open pull requests</label>
+          <label class="check"><input type="checkbox" name="src_slack" /> Slack messages to me that ask for work</label>
+        </fieldset>
+        <div class="row three">
+          <label>Check every <span class="hint">minutes</span><input name="everyMin" type="number" min="1" /></label>
+          <label>New agents a day <span class="hint">at most</span><input name="maxPerDay" type="number" min="0" /></label>
+          <label>Running at once <span class="hint">at most</span><input name="maxRunning" type="number" min="0" /></label>
+        </div>
+        <label>Notes for the assistant <span class="hint">e.g. "Jira project OPS is the @cc repo; skip issues labeled design"</span>
+          <textarea name="notes" rows="3"></textarea>
+        </label>
+        <div id="assistant-activity" class="assistant-activity"></div>
+        <p id="assistant-error" class="error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" id="assistant-start" class="primary">Start</button>
+          <button type="button" id="assistant-check">Check now</button>
+          <button type="button" id="assistant-pause">Pause</button>
+          <button type="button" id="assistant-open" class="ghost">Open its session</button>
+          <span class="spacer"></span>
+          <button type="button" id="assistant-close" class="ghost">Close</button>
+          <button id="assistant-save">Save</button>
         </div>
       </form>
     </dialog>

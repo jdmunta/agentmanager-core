@@ -721,6 +721,32 @@ agentmgr leave           # the hub forgets this Mac
 
 **On Railway.** `hub/Dockerfile` builds the hub alone, with no node-pty and no Claude. Set `RAILWAY_DOCKERFILE_PATH=hub/Dockerfile`, `AGENTMGR_HUB_TOKEN`, `AGENTMGR_HUB_URL` (its https address) and, for Google sign-in, the three variables above; add a volume at `/data` so enrollments survive redeploys, and join with the `https://…up.railway.app` address.
 
+## Assistant
+
+An always-on Claude session that works on your behalf. **Assistant** in the top bar (or `agentmgr assistant start`) sets it up. Every 15 minutes the daemon asks it to check for new work, and it starts an agent for each new item, or passes the news to the agent already on it. You don't approve each one; it tells you in its activity log and, with Slack alerts on, in Slack.
+
+| It watches | What it does |
+|---|---|
+| Jira issues newly assigned to you | Starts an agent in the matching project, with the issue link first so the agent is named after the issue (`OPS-7`) |
+| New comments and mentions on your Jira issues | Passes the comment to the agent on that issue (`agentmgr tell`), or starts one if the comment asks for new work |
+| GitHub pull requests waiting for your review | Starts a review agent that drafts the review for you to post |
+| Failing checks on your open pull requests | Tells the agent on that PR to fix it, or starts one |
+| Slack messages to you that ask for work | Starts an agent for clear requests in a known project |
+
+It reads Jira and Slack with the tools your Claude Code already has (no credentials in agentmgr), so connect the Atlassian and Slack MCP servers at user scope, and sign in to `gh`. It runs in `~/.agentmanager/assistant` in `auto` permission mode, so it can run `agentmgr` and `gh` without asking. It never merges, approves, comments or sends messages as you.
+
+The daemon enforces its limits, whatever the session decides: at most 10 new agents a day, at most 5 of its agents running at once, and never a second agent for the same Jira key. Agents it started are marked **by assistant**. It keeps what it has handled in `handled.json` so it never acts twice, and writes `activity.md`, shown in the dialog, with a **Needs you** list for anything it couldn't place. Use **Notes for the assistant** to say which Jira project goes to which repo. Clean up never closes the assistant.
+
+```bash
+agentmgr assistant start                    # set it up, or turn it back on
+agentmgr assistant                          # on or paused, last check, agents it started (--activity for its log)
+agentmgr assistant check                    # check now
+agentmgr assistant set --every 10 --sources jira,comments,reviews,ci --max-per-day 5 --notes "OPS is the @cc repo"
+agentmgr assistant pause                    # stop checking and close the session
+```
+
+Settings live in `config.json` under `"assistant"`. A running assistant reads new watch lists and notes after **Pause** and **Turn on**.
+
 ## Cleaning up old agents
 
 Agents you no longer use keep a session open and a worktree on disk. **Clean up** (in the top bar, or `agentmgr cleanup`) closes agents with no activity for a while and deletes agents that stayed closed long after that. Pick a strategy:

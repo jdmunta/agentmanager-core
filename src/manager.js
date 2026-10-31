@@ -46,6 +46,7 @@ import { Judge, clashPrompt, finishMessage, hash, reviewPrompt, screenPrompt, st
 import { findLocalUrls, findSignInLinks, parseCallback, parseUrl } from './preview.js';
 import { Plugins } from './plugins.js';
 import { leadPrompt, subagents, teamDir, teamPrompt } from './teams.js';
+import { assistantDir, assistantPrompt, assistantSettings } from './assistant.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
 import {
   bugFromRef,
@@ -119,9 +120,13 @@ export function repoCacheDir(repo) {
   return path.join(paths.repos, `${git.repoNameFromUrl(repo)}-${hash}`);
 }
 
+/** Sessions with no repo or folder of their own. */
+export const NO_REPO = new Set(['general', 'assistant']);
+
 export function projectOf(agent) {
   if (agent.project) return { key: `custom:${agent.project.toLowerCase()}`, name: agent.project, source: 'custom' };
   if (agent.kind === 'general') return { key: 'general', name: 'General', source: 'general' };
+  if (agent.kind === 'assistant') return { key: 'assistant', name: 'Assistant', source: 'assistant' };
   const url = agent.repo || agent.git?.remote;
   if (url && /[:/]/.test(url)) {
     const path = url
@@ -363,7 +368,7 @@ export class AgentManager extends EventEmitter {
 
   /** Make sure the agent's project has a shortcut; remember where it lives for "add @cc". */
   registerProject(agent) {
-    if (!agent || agent.kind === 'general') return null;
+    if (!agent || NO_REPO.has(agent.kind)) return null;
     const info = projectOf(agent);
     if (info.key === 'other') return null;
     const reg = this.store.data.projects;
@@ -512,6 +517,7 @@ export class AgentManager extends EventEmitter {
     engine,
     sessionId: adopt,
     imported,
+    startedBy,
   }) {
     intent = (intent ?? '').trim();
     const engineDef = engineOf(engine || this.config.engine || DEFAULT_ENGINE);
@@ -524,7 +530,7 @@ export class AgentManager extends EventEmitter {
     }
     // Planning while cloning moves the session between folders, which needs the engine's support.
     if (!engineDef.supports.planHandoff) plan = false;
-    const general = kind === 'general';
+    const general = NO_REPO.has(kind);
     // A project shortcut (or name) fills in the repo / folder / base branch.
     const entry = !general && project ? this.resolveProject(project) : null;
     if (entry) {
@@ -548,10 +554,11 @@ export class AgentManager extends EventEmitter {
 
     const agent = {
       id,
-      kind: general ? 'general' : 'task',
+      kind: general ? kind : 'task',
       engine: engineId,
       project: project?.trim() || null,
       priority: parsePriority(priority),
+      ...(startedBy ? { startedBy } : {}),
       name: name?.trim() || jiraKey || slug,
       slug,
       intent,
@@ -686,6 +693,10 @@ export class AgentManager extends EventEmitter {
     if (agent.kind === 'general') {
       fs.mkdirSync(paths.general, { recursive: true });
       return { workdir: paths.general };
+    }
+    if (agent.kind === 'assistant') {
+      fs.mkdirSync(assistantDir(), { recursive: true });
+      return { workdir: assistantDir() };
     }
     let repo = agent.repo;
     let dir = agent.requestedDir ? path.resolve(expandHome(agent.requestedDir)) : null;
@@ -858,7 +869,7 @@ export class AgentManager extends EventEmitter {
     let writableDir = null;
     let agents = null;
     const prompts = [];
-    const task = agent.kind !== 'general';
+    const task = !NO_REPO.has(agent.kind);
     const withBrief = Boolean(this.config.brief && task);
     if (this.config.reviewConventions && task) prompts.push(conventionsPrompt({ withBrief, rulesFiles: engine.rulesFiles ?? null }));
     if (withBrief) {
@@ -876,6 +887,12 @@ export class AgentManager extends EventEmitter {
       prompts.push(agent.planReview.status === 'approved' ? planApprovedPrompt(file) : planReviewPrompt(file));
     }
     if (planning) prompts.push(planningPrompt(agent));
+    if (agent.kind === 'assistant') {
+      fs.mkdirSync(assistantDir(), { recursive: true });
+      const dir = fs.realpathSync(assistantDir());
+      writableDir = dir;
+      prompts.push(assistantPrompt(assistantSettings(this.config), dir));
+    }
     if (agent.team) {
       // Team members write their handoff files in the team's folder.
       fs.mkdirSync(teamDir(agent.team.id), { recursive: true });
@@ -2049,7 +2066,7 @@ export class AgentManager extends EventEmitter {
   /** Recompute what an agent's branch changed since it branched (needs a base commit). */
   async updateChanges(agent) {
     const baseSha = agent.baseRef?.split(' @ ')[1];
-    if (!agent.workdir || !baseSha || agent.kind === 'general' || !fs.existsSync(agent.workdir)) return;
+    if (!agent.workdir || !baseSha || NO_REPO.has(agent.kind) || !fs.existsSync(agent.workdir)) return;
     // A full diff against the base is heavier than git status; once a minute is enough for overlaps.
     const prev0 = this.changeSets.get(agent.id);
     if (prev0 && Date.now() - Date.parse(prev0.at) < (this.config.conflictRefreshSec ?? 60) * 1000) return;
@@ -2087,7 +2104,7 @@ export class AgentManager extends EventEmitter {
     const byRepo = new Map();
     for (const e of entries) {
       const k = repoKey(e.agent);
-      if (k && e.agent.kind !== 'general') (byRepo.get(k) ?? byRepo.set(k, []).get(k)).push(e);
+      if (k && !NO_REPO.has(e.agent.kind)) (byRepo.get(k) ?? byRepo.set(k, []).get(k)).push(e);
     }
     for (const group of byRepo.values()) {
       for (let i = 0; i < group.length; i++) {
@@ -2323,7 +2340,7 @@ export class AgentManager extends EventEmitter {
     const a = this.store.get(id);
     if (!a) return;
     this.changed(a);
-    if (sure && data.state === 'done' && a.kind !== 'general') this.requestReview(id, { trigger: 'screen' }).catch(() => {});
+    if (sure && data.state === 'done' && !NO_REPO.has(a.kind)) this.requestReview(id, { trigger: 'screen' }).catch(() => {});
   }
 
   /** The person says the agent is not actually waiting on them. */
@@ -2404,7 +2421,7 @@ export class AgentManager extends EventEmitter {
   // ------------------------------------------------------- decision inbox
 
   questionsView(agent) {
-    if (agent.kind === 'general') return [];
+    if (NO_REPO.has(agent.kind)) return [];
     const answers = agent.answers ?? {};
     return loadQuestions(agent.id).map((q) => ({ ...q, answer: answers[q.id] ?? null }));
   }
@@ -2464,7 +2481,7 @@ export class AgentManager extends EventEmitter {
    */
   async checkpoint(id) {
     const agent = this.store.get(id);
-    if (!agent?.workdir || agent.kind === 'general' || !agent.branch || this.checkpointing?.has(id)) return null;
+    if (!agent?.workdir || NO_REPO.has(agent.kind) || !agent.branch || this.checkpointing?.has(id)) return null;
     // Output pauses mid-turn too (a slow command); one snapshot per half minute is plenty.
     this.lastCheckpointTry ??= new Map();
     if (Date.now() - (this.lastCheckpointTry.get(id) ?? 0) < 30_000) return null;
