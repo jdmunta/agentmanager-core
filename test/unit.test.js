@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { repoNameFromUrl, isRemoteUrl } from '../src/git.js';
-import { slugify } from '../src/manager.js';
+import { AgentManager, slugify } from '../src/manager.js';
 import { STATE_VERSION, Store } from '../src/store.js';
 import { checkSummary, claudeProjectDir, compactPr, extractRefs, landState, leadingJiraKey, scanTranscript } from '../src/tracker.js';
 import { checksMessage, landingSettings, reviewMessage } from '../src/landing.js';
@@ -881,4 +881,31 @@ test('the web UI scripts parse', async () => {
   const { execFileSync } = await import('node:child_process');
   const dir = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'public');
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js'))) execFileSync(process.execPath, ['--check', path.join(dir, f)]);
+});
+
+test('a pull request check asked for during one in progress runs again, once for all waiting', async () => {
+  const runs = [];
+  let release;
+  const fake = {
+    refreshing: new Map(),
+    mustGet: (id) => ({ id }),
+    store: { get: (id) => ({ id }) },
+    view: (a) => a,
+    refresh: AgentManager.prototype.refresh,
+    doRefresh(id, { withPrs }) {
+      const n = runs.push({ withPrs });
+      return n === 1 ? new Promise((r) => (release = () => r(n))) : Promise.resolve(n);
+    },
+  };
+  const refresh = (o) => AgentManager.prototype.refresh.call(fake, 'a', o);
+  const first = refresh({ withPrs: true });
+  const plain = refresh();
+  const later = [refresh({ withPrs: true }), refresh({ withPrs: true })];
+  release();
+  assert.equal(await first, 1);
+  assert.deepEqual(await plain, { id: 'a' }, 'a plain refresh shares the one in progress');
+  assert.deepEqual(await Promise.all(later), [2, 2], 'both get the run that started after them');
+  assert.equal(runs.length, 2);
+  assert.equal(fake.refreshing.size, 0);
+  assert.equal(await refresh({ withPrs: true }), 3, 'and the next one starts afresh');
 });

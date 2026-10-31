@@ -1991,18 +1991,19 @@ export class AgentManager extends EventEmitter {
     const id = this.mustGet(ref).id;
     const running = this.refreshing.get(id);
     if (running) {
-      // A pull request check asked for during a plain refresh runs right after it.
-      if (!withPrs || running.withPrs) return running.promise.then(() => this.store.get(id) && this.view(this.store.get(id)));
-      await running.promise.catch(() => {});
-      return this.refresh(id, { withPrs });
+      if (!withPrs) return running.promise.then(() => this.store.get(id) && this.view(this.store.get(id)));
+      // A pull request check runs again after the one in progress, which may have read PRs from
+      // before this request; callers arriving meanwhile share that next run.
+      running.next ??= running.promise.catch(() => {}).then(() => this.refresh(id, { withPrs }));
+      return running.next;
     }
-    const promise = this.doRefresh(id, { withPrs });
-    this.refreshing.set(id, { promise, withPrs });
-    try {
-      return await promise;
-    } finally {
-      this.refreshing.delete(id);
-    }
+    // Cleared before anyone waiting on it continues, so the next run starts afresh.
+    const entry = { withPrs };
+    entry.promise = this.doRefresh(id, { withPrs }).finally(() => {
+      if (this.refreshing.get(id) === entry) this.refreshing.delete(id);
+    });
+    this.refreshing.set(id, entry);
+    return entry.promise;
   }
 
   async doRefresh(id, { withPrs }) {
