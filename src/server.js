@@ -10,9 +10,17 @@ import { ensureHome, HOST, loadConfig, paths, PORT, saveConfig } from './config.
 import { AgentManager, shellNumber } from './manager.js';
 import { Backlog } from './backlog.js';
 import { Races } from './races.js';
+import { Review } from './review.js';
 import { Teams } from './teams.js';
 import { Assistant } from './assistant.js';
 import { Cleanup } from './cleanup.js';
+import { Landing } from './landing.js';
+import { Budgets } from './budgets.js';
+import { stats } from './stats.js';
+import { Playbooks } from './playbooks.js';
+import { Memory } from './memory.js';
+import { doctor } from './doctor.js';
+import { Triggers, tokenMatches } from './triggers.js';
 import { listEngines, registerEngine } from './engines/index.js';
 import { Plugins, pluginSpecs } from './plugins.js';
 import { HubLink, linkUrls } from './hublink.js';
@@ -47,7 +55,9 @@ function isAllowedOrigin(origin, port) {
 }
 
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|shutdown$)/;
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|shutdown$)/;
+const HOOK_PATH = '/api/hooks/agents';
+const NO_REPO_KINDS = new Set(['general', 'assistant']);
 
 export async function startServer({ port = PORT, host = HOST } = {}) {
   ensureHome();
@@ -58,8 +68,10 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const manager = new AgentManager({ store, config, plugins });
   const backlog = new Backlog({ manager, store, config });
   const races = new Races({ manager, store });
+  const review = new Review({ manager });
   const teams = new Teams({ manager, store, config });
   const cleanup = new Cleanup({ manager, store, config, teams });
+  const landing = new Landing({ manager, store, config });
   const assistant = new Assistant({ manager, store, config });
   // Alerts link to the phone address when remote access is on, else the local UI.
   const notifier = new Notifier({
@@ -71,6 +83,10 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       return `${phone ? phone.url : `http://127.0.0.1:${port}/`}#${id}/term`;
     },
   });
+  const triggers = new Triggers({ manager, store, config, notifier });
+  const budgets = new Budgets({ manager, store, config, notifier });
+  const playbooks = new Playbooks({ manager, store });
+  const memory = new Memory({ manager, config });
   let remoteServer = null;
   let remotePort = null;
   // Live browser tabs: what a page does is saved on the agent's tab; popups become new tabs.
@@ -137,9 +153,13 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    // The webhook signs in with its token instead of a device session or the client header.
+    const bearer = /^Bearer (.+)$/i.exec(req.headers.authorization ?? '')?.[1];
+    const hook = req.method === 'POST' && req.url.split('?')[0] === HOOK_PATH && tokenMatches(req.headers['x-agentmgr-token'] ?? bearer, config.triggers?.webhook?.enabled ? config.triggers.webhook.token : null);
     const why = denied(req);
-    if (why) return res.status(why === 'Sign in required' ? 401 : 403).json({ error: why });
-    if (!['GET', 'HEAD'].includes(req.method) && req.headers[CLIENT_HEADER] !== '1') {
+    if (why && !(hook && why === 'Sign in required')) return res.status(why === 'Sign in required' ? 401 : 403).json({ error: why });
+    if (req.url.split('?')[0] === HOOK_PATH && !hook) return res.status(401).json({ error: 'Bad or missing token' });
+    if (!hook && !['GET', 'HEAD'].includes(req.method) && req.headers[CLIENT_HEADER] !== '1') {
       return res.status(403).json({ error: `Missing ${CLIENT_HEADER} header` });
     }
     next();
@@ -403,6 +423,10 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     await manager.checkpoint(id);
     return manager.get(id);
   }));
+  api.get('/agents/:id/changes', wrap((req) => review.get(req.params.id)));
+  api.post('/agents/:id/changes/comments', wrap((req) => review.comment(req.params.id, req.body ?? {})));
+  api.post('/agents/:id/changes/commit', wrap((req) => review.commit(req.params.id, req.body ?? {})));
+  api.post('/agents/:id/changes/pr', wrap((req) => review.pr(req.params.id, req.body ?? {})));
   api.post('/agents/:id/fork', wrap((req) => manager.fork(req.params.id, req.body ?? {})));
 
   api.get('/races', wrap(() => races.list()));
@@ -423,6 +447,56 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/assistant/start', wrap(() => assistant.start()));
   api.post('/assistant/pause', wrap(() => assistant.pause()));
   api.post('/assistant/check', wrap(() => assistant.check()));
+  api.get('/triggers', wrap(() => triggers.view()));
+  api.put('/triggers', wrap((req) => {
+    const { saved, token } = triggers.update(req.body ?? {});
+    saveConfig({ triggers: saved });
+    return { ...triggers.view(), ...(token ? { token } : {}) };
+  }));
+  api.post('/triggers/poll', wrap(async () => ({ ...(await triggers.poll()), ...triggers.view() })));
+  api.post('/hooks/agents', wrap((req) => triggers.hook(req.body ?? {})));
+  api.get('/agents/:id/memory', wrap((req) => memory.read(req.params.id)));
+  api.put('/agents/:id/memory', wrap((req) => memory.write(req.params.id, req.body?.text)));
+  api.post('/agents/:id/learn', wrap((req) => memory.learn(req.params.id, req.body?.text, { by: req.headers['x-agentmgr-agent'] ? undefined : 'you' })));
+  // The first-run checklist: what is set up, and what this machine is missing.
+  api.get('/setup', wrap(async () => {
+    const checks = (await doctor().catch(() => [])).filter((c) => c.status === 'fail' || c.status === 'warn').filter((c) => c.name !== 'Daemon');
+    const agentsNow = store.list();
+    return {
+      checks,
+      steps: {
+        agent: agentsNow.some((a) => !NO_REPO_KINDS.has(a.kind)),
+        alerts: Boolean(loadNotify().enabled),
+        assistant: agentsNow.some((a) => a.kind === 'assistant') || Boolean(config.triggers?.github?.enabled || config.triggers?.webhook?.enabled),
+        remote: Boolean(remote.loadSettings().enabled),
+        budget: Boolean(config.budgets?.perAgentUsd || config.budgets?.perDayUsd),
+      },
+    };
+  }));
+  api.get('/playbooks', wrap(() => playbooks.list()));
+  api.post('/playbooks', wrap((req) => playbooks.create(req.body ?? {})));
+  api.put('/playbooks/:id', wrap((req) => playbooks.update(req.params.id, req.body ?? {})));
+  api.delete('/playbooks/:id', wrap((req) => playbooks.remove(req.params.id)));
+  api.post('/playbooks/:id/run', wrap((req) => playbooks.run(req.params.id, { vars: req.body?.vars ?? {} })));
+  api.get('/stats', wrap((req) => {
+    const days = req.query.days === undefined ? 30 : Math.max(0, Math.min(3650, Math.floor(Number(req.query.days)) || 0));
+    return stats(store.list(), { days, projectOf: (a) => manager.projectInfo(a)?.name ?? null });
+  }));
+  api.get('/budgets', wrap(() => budgets.status()));
+  api.put('/budgets', wrap((req) => {
+    const next = budgets.update(req.body ?? {});
+    saveConfig({ budgets: next });
+    return budgets.status();
+  }));
+  api.get('/landing', wrap(() => landing.list()));
+  api.put('/landing', wrap((req) => {
+    const next = landing.update(req.body ?? {});
+    saveConfig({ landing: next });
+    return landing.list();
+  }));
+  api.post('/agents/:id/land/update', wrap((req) => landing.updateBranch(req.params.id, req.body ?? {})));
+  api.post('/agents/:id/land/fix', wrap((req) => landing.fix(req.params.id, req.body ?? {})));
+  api.post('/agents/:id/land/merge', wrap((req) => landing.merge(req.params.id, req.body ?? {})));
   api.get('/cleanup', wrap(() => cleanup.status()));
   api.put('/cleanup', wrap(async (req) => {
     const next = cleanup.update(req.body ?? {});
@@ -775,6 +849,10 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     if (closing) return;
     closing = true;
     cleanup.close();
+    landing.close();
+    triggers.close();
+    budgets.close();
+    playbooks.close();
     assistant.close();
     console.log(`[agentmgr] shutting down (${reason}); closing agents so their sessions are saved`);
     await manager.stopAll({ final: true });
@@ -812,6 +890,10 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     manager,
     teams,
     cleanup,
+    landing,
+    triggers,
+    budgets,
+    playbooks,
     assistant,
     backlog,
     live,

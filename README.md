@@ -27,6 +27,13 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Priority.** Mark agents P0–P3. P0 and P1 are highlighted, and lists sort by priority.
 - **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work. Copy it as Markdown, download it, or print it to PDF with diagrams.
 - **Human vs AI.** It splits the open questions about the work into the top 5 that need your judgment and the ones a model can answer from the evidence. It answers those, then a second model double-checks every answer.
+- **Review changes.** Each agent's diff file by file, line comments sent back to the agent as one message, then **Commit all** and **Push & open PR**, without leaving the page.
+- **Landing.** A **Land** tab with every agent's open pull request: ready to merge, needs fixes, behind, waiting. Failing checks and requested changes go back to the agent automatically (a few times at most); **Update**, **Ask to fix** and **Merge** in one click.
+- **Triggers.** A label on a GitHub issue starts an agent for it, `/agent …` comments on an agent's pull request reach the agent, and a webhook starts agents from Jira automation or CI. No model watches, so no tokens are spent waiting.
+- **Repo memory.** What one agent learns about a repo (how to run its tests, a gotcha) is recorded in one line and given to every later agent there.
+- **Playbooks.** Saved requests with `{{values}}`, run in several projects at once (one agent each), by hand or every hour, day, weekday or week.
+- **Results.** Merge rate, time to a first PR and to merge, and cost per merged PR, by engine and model, by source and by project.
+- **Budgets.** What agents cost today and lately, a budget per agent (an alert at 80%, closed at 100%) and a daily limit for all of them.
 - **Plan review.** Optionally, the agent writes an implementation plan and waits for your approval before changing anything.
 - **Insights.** Why, What, How and Now for any agent, three memorable points each.
 - **Explain.** One click gives a plain-language explanation of the intent and the insight behind the problem and solution. It comes from a separate tool-less Claude call, so the agent isn't interrupted.
@@ -369,6 +376,36 @@ Tick **Review the implementation plan first** in New agent (or the backlog), or 
 
 Each card has at most **three points of about 12 words each**, so they're easy to remember and repeat. Insights uses the same context and the same separate, tool-less Claude call as Explain, so the agent isn't interrupted. Use Insights for a quick glance and Explain for the full briefing.
 
+## Review changes
+
+**Review changes** on an agent opens its changes against where its branch started (the merge base with the branch it came from), new files included:
+
+- **Files and diff.** The changed files on the left with lines added and removed, and the diff file by file on the right. Click a file header to fold it; very large files start folded.
+- **Line comments.** Click **+** next to a line (or its line number) to comment on it, and add an overall comment if you like. **Send to agent** types them into the agent as one message, each with its file, line and the code it is about, and asks it to address them. Comments not sent yet are kept in this browser.
+- **Commit all** commits everything in the worktree, new files included, with your git name and email.
+- **Push & open PR** pushes the branch and opens a pull request with `gh`, against the branch the agent started from (title from your text, or from the commits; **Draft** if you like). With a pull request already open, it pushes to it. The pull request is linked to the agent.
+
+The same from the API: `GET /api/agents/:id/changes`, `POST …/changes/comments`, `…/changes/commit`, `…/changes/pr`. Plugins can refuse a commit or a pull request (`agent.commit`, `agent.pr`).
+
+## Landing pull requests
+
+The **Land** tab lists every agent's open pull request by what it needs to get merged, ready ones first:
+
+- **Ready to merge**: checks pass and GitHub says it can merge. **Merge** merges it with `gh` (squash by default) and deletes the branch on GitHub.
+- **Needs fixes**: failing checks, changes requested, or conflicts. **Ask to fix** sends them to the agent.
+- **Behind its base**: **Update** merges the branch it targets into the agent's branch and pushes, when the agent is idle and its work is committed. Otherwise, or when the merge conflicts (it is undone), the agent is asked to do it.
+- **Waiting** for checks or a review, and **Drafts**. **Auto-merge** turns on GitHub's auto-merge, so it merges once it may.
+
+Each agent's pull requests show the same tags (checks, review, conflicts). Pull requests are checked every couple of minutes for running agents, and every few minutes for closed agents with a PR still open.
+
+**Failures go back to the agent by themselves.** When checks fail on an agent's pull request, the agent is told which ones and how to read their logs; when a reviewer requests changes, it is told to read and address the review. Each commit is reported once, and at most 3 times per pull request, so an agent can't loop on a broken main. Change this at the bottom of the Land tab, with `agentmgr land set`, or in config.json:
+
+```json
+"landing": { "fixChecks": true, "fixReviews": true, "maxFixes": 3, "mergeMethod": "squash", "deleteBranch": true }
+```
+
+From a terminal: `agentmgr land` lists them, `agentmgr land update|fix|merge <agent>` (`--auto` for auto-merge). With `agentmgr changes`, `comment`, `commit` and `pr` you can review and open the pull request too. Plugins can refuse a merge (`agent.merge`).
+
 ## Results
 
 The **Results** card is the first thing in the Brief panel, and `agentmgr show` lists it too. It shows:
@@ -468,6 +505,27 @@ Queue asks instead of starting them. Use **+ Add** in the Backlog tab, **Queue i
 - Deleting an agent cancels its item.
 
 The backlog is saved with the rest of the state.
+
+## Playbooks
+
+Saved requests you run again: **Backlog → Playbooks**, **Save as playbook…** in New agents, or `agentmgr playbook`. A playbook is a request, the projects to run it in (one agent each), and optionally a model, permission mode, priority and schedule:
+
+- **Values at run time.** Write `{{name}}` in the request for something you fill in when it runs: "Upgrade `{{package}}` to the latest version, fix what breaks and open a pull request". **Run now** asks for each value; `agentmgr playbook run Upgrade --var package=react`.
+- **Several projects at once.** "Bump the Node version" in every repo starts one agent per project.
+- **On a schedule.** Every hour, day, weekday or week at a time you pick ("every weekday at 9:00, triage yesterday's flaky tests"). A scheduled playbook needs a default for each `{{value}}`. A run missed while the daemon was off runs once when it is back. Budgets and the daily limit apply.
+
+Agents started by a playbook are marked **▶ <playbook>**, and the playbook lists the agents of its last run.
+
+```sh
+agentmgr playbook add "Flaky tests" "Find yesterday's flaky tests in CI and fix or quarantine them" --projects web,api --every weekday --at 09:00
+agentmgr playbook ls
+```
+
+## Repo memory
+
+Agents in the same repository share what they learn. When an agent finds out something non-obvious that would save the next one time (how to build or run the tests, a gotcha, where something lives, a convention that isn't written down), it records one line with `agentmgr learn "…"`, which it may run without asking. Every agent that starts in that repo afterwards gets the list with its instructions. Each line says which agent added it and when, and the same thing isn't added twice.
+
+**Repo memory → View and edit** on an agent's Workspace card shows the file to tidy (keep it short and true; it is capped at 16 KB), and `agentmgr memory <agent>` prints it. The files live in `~/.agentmanager/memory/`, one per repository. Turn it off with `"memory": false` in config.json.
 
 ## Decision inbox
 
@@ -739,6 +797,7 @@ An always-on Claude session that works on your behalf. **Assistant** in the top 
 | It watches | What it does |
 |---|---|
 | Jira issues newly assigned to you | Starts an agent in the matching project, with the issue link first so the agent is named after the issue (`OPS-7`) |
+| Linear issues newly assigned to you (turn it on in the dialog) | The same, with the Linear link first (`ENG-42`) |
 | New comments and mentions on your Jira issues | Passes the comment to the agent on that issue (`agentmgr tell`), or starts one if the comment asks for new work |
 | GitHub pull requests waiting for your review | Starts a review agent that drafts the review for you to post |
 | Failing checks on your open pull requests | Tells the agent on that PR to fix it, or starts one |
@@ -757,6 +816,38 @@ agentmgr assistant pause                    # stop checking and close the sessio
 ```
 
 Settings live in `config.json` under `"assistant"`. A running assistant reads new watch lists and notes after **Pause** and **Turn on**.
+
+## Triggers
+
+Start agents from where the work lives, with no session watching and no tokens spent on it. **Assistant → Triggers…**, or `agentmgr triggers`:
+
+- **GitHub label.** Every few minutes, open issues with a label (`agentmgr` by default) in the repos or owners you list each get an agent in that repo, named `repo#12`, asked to open a pull request that fixes the issue. A project already on that repo reuses its clone. Each issue starts one agent, once. Labeling an issue needs triage access to the repo, so that is the go-ahead. **Comment on the issue** (off by default) says an agent is on it.
+- **Pull request comments.** A comment that starts with `/agent` on an agent's open pull request, from the repo's owners, members or collaborators, is typed into that agent: `/agent add a test for Safari`. On by default.
+- **Webhook.** `POST /api/hooks/agents` with `Authorization: Bearer <token>` and `{"intent": "…", "project": "<shortcut>"}` (or `"repo": "<git URL>"`, optional `"name"`, `"priority"`, `"url"`) creates an agent, for Jira automation, CI or scripts. Off until you make a token (**New token**, or `agentmgr triggers set --new-token`); the token is shown once. **Only these repos** limits where it may start agents. The daemon listens on this computer only, so other machines reach it through remote access.
+
+Agents started this way are marked **⚡ GitHub** or **⚡ webhook**, Slack alerts can announce them, and triggers start at most 20 agents a day (`maxPerDay`). Agents use your default permission mode; a webhook can't pick another. In config.json:
+
+```json
+"triggers": {
+  "github": { "enabled": true, "label": "agentmgr", "repos": ["acme/web"], "owners": [], "everyMin": 5, "comment": false },
+  "prCommands": { "enabled": true, "prefix": "/agent" },
+  "webhook": { "enabled": false, "repos": [] },
+  "maxPerDay": 20
+}
+```
+
+## Results and spend
+
+**Results** in the top bar shows how agents did over the last 7, 30 or 90 days (or all time): how many started and how many opened a pull request, PRs merged and closed, the merge rate, the median time from starting an agent to its first PR and to merge, and the cost per merged PR. The same by engine and model (which one gets merged more, for less), by where agents came from (you, the assistant, triggers, the backlog, teams, races) and by project. `agentmgr stats --days 30`.
+
+### Spend and budgets
+
+The same dialog shows what agents cost today, the last two weeks and the costliest agents, from the cost Claude Code records for each session (the API price, even on a subscription plan; Codex and Antigravity record none). Set limits there, with `agentmgr spend --per-agent 5 --per-day 50`, or in config.json (`"budgets": { "perAgentUsd": 5, "perDayUsd": 50 }`):
+
+- **Each agent.** At 80% of its budget you get an alert. At its budget its session is closed, and it doesn't start or resume until you raise its budget. **Edit** on an agent (or `agentmgr edit <agent> --budget 20`) gives it its own budget.
+- **All agents a day.** Once today's spend reaches it, no new agents start or resume, from the UI, the CLI, the backlog, triggers or the assistant, until tomorrow or a higher limit. Running agents go on.
+
+Alerts for both go to Slack with **Alerts → nears or reaches its budget**.
 
 ## Cleaning up old agents
 

@@ -6,12 +6,20 @@ import test from 'node:test';
 import { repoNameFromUrl, isRemoteUrl } from '../src/git.js';
 import { slugify } from '../src/manager.js';
 import { STATE_VERSION, Store } from '../src/store.js';
-import { claudeProjectDir, extractRefs, leadingJiraKey, scanTranscript } from '../src/tracker.js';
+import { checkSummary, claudeProjectDir, compactPr, extractRefs, landState, leadingJiraKey, scanTranscript } from '../src/tracker.js';
+import { checksMessage, landingSettings, reviewMessage } from '../src/landing.js';
+import { issueIntent, prCommand, tokenMatches, triggerSettings } from '../src/triggers.js';
+import { budgetSettings, costOf, dayKey } from '../src/budgets.js';
+import { sourceOf, stats } from '../src/stats.js';
+import { cleanSchedule, nextRun, placeholders, render } from '../src/playbooks.js';
+import { cleanLearning, memoryKey, memoryPrompt } from '../src/memory.js';
 import { passEnv, plist, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
 import { cleanupSettings } from '../src/cleanup.js';
+import { commentsMessage, parseBaseRef, prBase } from '../src/review.js';
+import { parseDiff } from '../public/review.js';
 import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-unit-'));
@@ -752,4 +760,125 @@ test('assistantPrompt: one section per watched source, limits, memory and the ne
   assert.match(p, /\/tmp\/a\/activity\.md/);
   assert.match(p, /Never merge, approve/);
   assert.match(p, /OPS goes to @cc/);
+});
+
+test('review: base ref, PR target, comments message, diff parsing', () => {
+  assert.deepEqual(parseBaseRef('origin/main @ 1a2b3c4d5'), { ref: 'origin/main', sha: '1a2b3c4d5' });
+  assert.equal(parseBaseRef(null), null);
+  assert.equal(prBase('origin/release/2.0'), 'release/2.0');
+  assert.equal(prBase('HEAD'), null);
+  assert.equal(prBase('1a2b3c4d5'), null);
+  const m = commentsMessage([{ file: 'src/a.js', line: 3, side: 'new', code: '  let x = 1;', text: 'Use const' }, { file: 'b.md', line: 9, side: 'old', text: 'Keep this\nline' }], 'Thanks');
+  assert.match(m, /1\. src\/a\.js:3\n   > let x = 1;\n   Use const/);
+  assert.match(m, /2\. b\.md:9 \(removed line\)\n   Keep this\n   line/);
+  assert.match(m, /\n\nThanks$/);
+  const files = parseDiff(['diff --git a/a.txt b/a.txt', 'index 1..2 100644', '--- a/a.txt', '+++ b/a.txt', '@@ -1,3 +1,3 @@', ' one', '-two', '+TWO', ' three',
+    'diff --git a/new.txt b/new.txt', 'new file mode 100644', '--- /dev/null', '+++ b/new.txt', '@@ -0,0 +1 @@', '+hi', '\\ No newline at end of file',
+    'diff --git a/img.png b/img.png', 'Binary files a/img.png and b/img.png differ'].join('\n'));
+  assert.deepEqual(files.map((f) => [f.path, f.status, f.binary]), [['a.txt', 'modified', false], ['new.txt', 'added', false], ['img.png', 'modified', true]]);
+  assert.deepEqual(files[0].hunks[0].lines.map((l) => [l.t, l.old, l.new]), [['ctx', 1, 1], ['del', 2, null], ['add', null, 2], ['ctx', 3, 3]]);
+  assert.deepEqual(files[1].hunks[0].lines, [{ t: 'add', old: null, new: 1, text: 'hi' }]);
+});
+
+test('landing: check summary, where a PR stands, settings and messages', () => {
+  assert.deepEqual(checkSummary([]), { state: 'none', failed: [], running: 0, total: 0 });
+  assert.deepEqual(checkSummary([{ name: 'a', status: 'COMPLETED', conclusion: 'SUCCESS' }, { context: 'ci/b', state: 'PENDING' }]), { state: 'running', failed: [], running: 1, total: 2 });
+  assert.equal(checkSummary([{ name: 'a', status: 'QUEUED' }, { name: 'x', status: 'COMPLETED', conclusion: 'TIMED_OUT' }]).state, 'failed');
+  const pr = compactPr({ url: 'u', state: 'OPEN', isDraft: false, headRefOid: 'abc', reviewDecision: '', mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', statusCheckRollup: [] });
+  assert.deepEqual(pr, { url: 'u', state: 'OPEN', isDraft: false, checks: { state: 'none', failed: [], running: 0, total: 0 }, review: null, mergeable: 'MERGEABLE', mergeState: 'CLEAN', head: 'abc' });
+  assert.equal(landState(pr), 'ready');
+  assert.equal(landState({ ...pr, isDraft: true }), 'draft');
+  assert.equal(landState({ ...pr, state: 'MERGED' }), 'merged');
+  assert.equal(landState({ ...pr, checks: { state: 'failed' } }), 'fix');
+  assert.equal(landState({ ...pr, review: 'CHANGES_REQUESTED' }), 'fix');
+  assert.equal(landState({ ...pr, mergeable: 'CONFLICTING', mergeState: 'DIRTY' }), 'fix');
+  assert.equal(landState({ ...pr, mergeState: 'BEHIND' }), 'behind');
+  assert.equal(landState({ ...pr, mergeState: 'BLOCKED', checks: { state: 'running' } }), 'waiting');
+  assert.equal(landState({ ...pr, mergeState: 'BLOCKED', review: 'REVIEW_REQUIRED' }), 'waiting');
+  assert.equal(landState({ url: 'u' }), null);
+  assert.deepEqual(landingSettings({}), { fixChecks: true, fixReviews: true, maxFixes: 3, mergeMethod: 'squash', deleteBranch: true });
+  assert.deepEqual(landingSettings({ landing: { fixChecks: false, maxFixes: 99, mergeMethod: 'octopus' } }), { fixChecks: false, fixReviews: true, maxFixes: 20, mergeMethod: 'squash', deleteBranch: true });
+  assert.match(checksMessage({ url: 'https://x/pull/4', number: 4, checks: { failed: ['unit', 'lint'] } }), /failing on your pull request https:\/\/x\/pull\/4 \(unit, lint\)[\s\S]*gh pr checks 4/);
+  assert.match(reviewMessage({ url: 'https://x/pull/4', number: 4 }), /requested changes[\s\S]*gh pr view 4 --comments/);
+});
+
+test('Linear links: issue key, agent name, bug ref', () => {
+  assert.equal(leadingJiraKey('https://linear.app/acme/issue/ENG-42/fix-the-login fix it'), 'ENG-42');
+  const refs = extractRefs('see https://linear.app/acme/issue/ENG-42/fix-the-login');
+  assert.deepEqual(refs.bugs.map((b) => b.key), ['ENG-42']);
+});
+
+test('triggers: settings, issue request, PR commands, token check', () => {
+  const d = triggerSettings({});
+  assert.deepEqual(d.github, { enabled: false, label: 'agentmgr', repos: [], owners: [], everyMin: 5, comment: false });
+  assert.equal(d.webhook.enabled, false, 'no token, no webhook');
+  const s = triggerSettings({ triggers: { github: { enabled: true, repos: 'acme/web, bad repo,acme/api', owners: ['acme', 'no/slash'] }, webhook: { enabled: true, token: 't' }, maxPerDay: 9999 } });
+  assert.deepEqual([s.github.repos, s.github.owners, s.webhook.enabled, s.maxPerDay], [['acme/web', 'acme/api'], ['acme'], true, 500]);
+  assert.match(issueIntent({ url: 'https://github.com/a/b/issues/3', number: 3, title: 'T', body: '' }), /^https:\/\/github\.com\/a\/b\/issues\/3\n\nT\n\nWhen you are done[\s\S]*Fixes #3/);
+  assert.equal(prCommand({ body: '/agent add tests', authorAssociation: 'MEMBER' }), 'add tests');
+  assert.equal(prCommand({ body: '/AGENT  add tests', authorAssociation: 'OWNER' }), 'add tests');
+  assert.equal(prCommand({ body: '/agent add tests', authorAssociation: 'NONE' }), null);
+  assert.equal(prCommand({ body: '/agent', authorAssociation: 'OWNER' }), null);
+  assert.equal(prCommand({ body: 'lgtm', authorAssociation: 'OWNER' }), null);
+  assert.equal(tokenMatches('abc', 'abc'), true);
+  assert.equal(tokenMatches('abd', 'abc'), false);
+  assert.equal(tokenMatches('abc', null), false);
+  assert.equal(tokenMatches('ab', 'abc'), false);
+});
+
+test('budgets: settings and cost', () => {
+  assert.deepEqual(budgetSettings({}), { perAgentUsd: null, perDayUsd: null, warnAt: 0.8 });
+  assert.deepEqual(budgetSettings({ budgets: { perAgentUsd: '5.555', perDayUsd: -3, warnAt: 2 } }), { perAgentUsd: 5.56, perDayUsd: null, warnAt: 0.8 });
+  assert.equal(costOf({ sessions: [{ cost: { usd: 1.25 } }, {}, { cost: { usd: 0.5 } }] }), 1.75);
+  assert.equal(dayKey(new Date(2026, 0, 5, 23, 59)), '2026-01-05');
+});
+
+test('stats: merge rate, time to PR and merge, cost per merged PR, by engine and source', () => {
+  const t0 = Date.parse('2026-10-01T00:00:00Z');
+  const h = (n) => new Date(t0 + n * 3_600_000).toISOString();
+  const agents = [
+    { id: 'a', createdAt: h(0), engine: 'claude', model: 'opus', sessions: [{ cost: { usd: 3 } }], prs: { u1: { url: 'u1', state: 'MERGED', openedAt: h(2), mergedAt: h(10), source: 'branch' } } },
+    { id: 'b', createdAt: h(1), engine: 'claude', startedBy: 'x', sessions: [{ cost: { usd: 1 } }], prs: { u2: { url: 'u2', state: 'CLOSED', openedAt: h(5), source: 'branch' }, m: { url: 'm', state: 'MERGED', source: 'mentioned' } } },
+    { id: 'c', createdAt: h(2), engine: 'codex', trigger: { source: 'github' }, sessions: [], prs: {} },
+    { id: 'g', createdAt: h(2), kind: 'general', sessions: [{ cost: { usd: 9 } }], prs: {} },
+    { id: 'old', createdAt: '2020-01-01T00:00:00Z', sessions: [], prs: {} },
+  ];
+  const s = stats(agents, { days: 30, now: t0 + 24 * 3_600_000 });
+  assert.deepEqual(s.total, { agents: 3, withPr: 2, merged: 1, closed: 1, open: 0, mergeRate: 0.5, cost: 4, costPerMerged: 4, medianHoursToPr: 3, medianHoursToMerge: 10, fixesSent: 0 });
+  const engine = Object.fromEntries(s.byEngine.map((r) => [r.key, [r.agents, r.merged, r.closed, r.mergeRate]]));
+  assert.deepEqual(engine, { 'claude · opus': [1, 1, 0, 1], claude: [1, 0, 1, 0], codex: [1, 0, 0, null] });
+  assert.deepEqual(new Set(s.bySource.map((r) => r.key)), new Set(['you', 'assistant', 'GitHub label']));
+  assert.equal(stats(agents, { days: 0, now: t0 }).total.agents, 4, 'all time');
+  assert.equal(sourceOf({ backlogItem: 'x' }), 'backlog');
+});
+
+test('playbooks: placeholders, schedules and the next run', () => {
+  assert.deepEqual(placeholders('Upgrade {{package}} to {{ version }}, then {{package}} docs'), ['package', 'version']);
+  assert.equal(render('Upgrade {{package}} to {{version}}', { package: 'react' }), 'Upgrade react to {{version}}');
+  assert.deepEqual(cleanSchedule({ every: 'week', at: '9:05', day: 'Friday' }), { every: 'week', at: '09:05', day: 'fri' });
+  assert.equal(cleanSchedule(null), null);
+  assert.throws(() => cleanSchedule({ every: 'month' }), /schedule.every/);
+  assert.throws(() => cleanSchedule({ every: 'day', at: '25:00' }), /HH:MM/);
+  const fri = new Date(2026, 9, 30, 10, 0); // a Friday, 10:00
+  assert.equal(nextRun({ every: 'day', at: '09:00' }, fri).getTime(), new Date(2026, 9, 31, 9, 0).getTime());
+  assert.equal(nextRun({ every: 'day', at: '11:30' }, fri).getTime(), new Date(2026, 9, 30, 11, 30).getTime());
+  assert.equal(nextRun({ every: 'weekday', at: '09:00' }, fri).getTime(), new Date(2026, 10, 2, 9, 0).getTime(), 'Monday');
+  assert.equal(nextRun({ every: 'week', at: '08:00', day: 'wed' }, fri).getTime(), new Date(2026, 10, 4, 8, 0).getTime());
+  assert.equal(nextRun({ every: 'hour', at: '00:15' }, fri).getTime(), new Date(2026, 9, 30, 10, 15).getTime());
+  assert.equal(nextRun({ every: 'hour', at: '00:15' }, new Date(2026, 9, 30, 10, 20)).getTime(), new Date(2026, 9, 30, 11, 15).getTime());
+});
+
+test('repo memory: key by repo, one-line learnings, the prompt', () => {
+  assert.equal(memoryKey({ repo: 'git@github.com:acme/web.git', project: 'Custom', projectMove: { key: 'x', name: 'X' } }), memoryKey({ repo: 'https://github.com/acme/web' }));
+  assert.equal(cleanLearning('  - npm test   needs\n Postgres '), 'npm test needs Postgres');
+  assert.throws(() => cleanLearning('  '), /Nothing to learn/);
+  assert.throws(() => cleanLearning('x'.repeat(401)), /one short line/);
+  assert.match(memoryPrompt('- a thing (agent, 2026-10-31)', 'agentmgr'), /learned working in this repository[\s\S]*- a thing[\s\S]*agentmgr learn "<the learning>"/);
+  assert.match(memoryPrompt('', 'agentmgr'), /empty so far/);
+});
+
+test('the web UI scripts parse', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const dir = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'public');
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js'))) execFileSync(process.execPath, ['--check', path.join(dir, f)]);
 });

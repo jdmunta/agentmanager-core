@@ -16,10 +16,12 @@ export const SOURCES = {
   ci: "the person's own open GitHub pull requests whose checks fail",
   comments: 'new comments and mentions on Jira issues the person owns',
   slack: 'Slack messages to the person (direct messages and mentions) that ask for work',
+  linear: 'Linear issues newly assigned to the person',
 };
 export const ASSISTANT_DEFAULTS = {
   everyMin: 15,
-  sources: Object.keys(SOURCES),
+  // Linear only when chosen: most people use Jira or Linear, not both.
+  sources: Object.keys(SOURCES).filter((k) => k !== 'linear'),
   maxPerDay: 10,
   maxRunning: 5,
   permissionMode: 'auto',
@@ -61,6 +63,14 @@ export function assistantPrompt(s, dir, bin = `node ${BIN}`) {
         `Start the request with the issue link: the agent is then named after the issue key, and the daemon refuses a second agent for the same key.`,
     );
   }
+  if (s.sources.includes('linear')) {
+    how.push(
+      `Linear, new assignments: with your Linear tools, find open issues assigned to the person that were created or assigned since your last check (on the first check, the last 2 days). ` +
+        `For each one you haven't handled, start an agent: ${am} add @<project> "<the issue link> <a one-line summary of what to do>". ` +
+        `Start the request with the issue link (https://linear.app/<team>/issue/<KEY>/…): the agent is then named after the issue key, and the daemon refuses a second agent for the same key. ` +
+        `New comments on issues that already have an agent: pass them on with ${am} tell, as for Jira.`,
+    );
+  }
   if (s.sources.includes('comments')) {
     how.push(
       `Jira, comments and mentions: find new comments on issues the person owns or is mentioned in, since your last check. ` +
@@ -92,12 +102,12 @@ export function assistantPrompt(s, dir, bin = `node ${BIN}`) {
     `Watch:\n${watch}`,
     `Each time you get a message starting with "Check now", do one check of every source above, act, record it, and wait for the next message. Don't loop or sleep on your own.`,
     `How:\n${how.map((h, i) => `${i + 1}. ${h}`).join('\n')}`,
-    `Projects: ${am} project ls shows the projects and their shortcuts. Pick the project whose repository matches the work (the Jira project, the GitHub repository). ` +
+    `Projects: ${am} project ls shows the projects and their shortcuts. Pick the project whose repository matches the work (the Jira or Linear project, the GitHub repository). ` +
       `If no project fits, use --repo <git URL> when you know the repository; if you don't know where the work belongs, don't start an agent: list it under "Needs you" in the activity file.`,
     `Limits: the daemon allows at most ${s.maxPerDay} new agents a day and ${s.maxRunning} of yours running at once, and refuses a second agent for the same issue. When ${am} add is refused, don't retry it in this check: record the reason.`,
     `Memory: keep ${path.join(dir, 'handled.json')} as a JSON object from item keys (a Jira key, a PR URL, "<key>#comment-<id>", a Slack message link) to { "at": time, "action": "started <agent id>" | "told <agent id>" | "skipped: why" }. Read it at the start of each check and add what you handled, so you never act on the same item twice. Keep "lastCheck" in it too.`,
     `Activity: after each check, append a short entry to ${path.join(dir, 'activity.md')}: a "## <date and time>" heading, then one line per action ("Started OPS-7 (agent 3fa2b1) in @cc: fix the login timeout", "Told 3fa2b1 about a new comment on OPS-7"), and a "Needs you" list for anything you couldn't decide. Write "Nothing new." when nothing came in. AI Agent Manager shows this file to the person.`,
-    `Never merge, approve, close, reassign or comment on anything in Jira, GitHub or Slack, and never send messages as the person. Reading, and starting or telling agents, is all you do.`,
+    `Never merge, approve, close, reassign or comment on anything in Jira, Linear, GitHub or Slack, and never send messages as the person. Reading, and starting or telling agents, is all you do.`,
     s.notes ? `The person's notes for you:\n${s.notes}` : '',
   ]
     .filter(Boolean)

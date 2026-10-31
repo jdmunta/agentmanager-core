@@ -53,6 +53,9 @@ Policies are synchronous so every code path can call them. Keep them fast; do sl
 | `agent.start` | Before an agent's engine is launched or resumed (including after a restart) | `agent`, `fresh` |
 | `agent.message` | Before a message is typed into an agent (`tell`, inbox replies) | `agent`, `text`, `source` |
 | `agent.remove` | Before an agent is deleted | `agent`, `deleteWorkspace` |
+| `agent.commit` | Before Commit in the review screen commits an agent's worktree | `agent`, `message` |
+| `agent.pr` | Before the review screen pushes an agent's branch and opens a pull request | `agent`, `title`, `draft` |
+| `agent.merge` | Before Merge (or auto-merge) in the Land tab merges an agent's pull request | `agent`, `url`, `method`, `auto` |
 | `terminal.open` | Before a live terminal is attached (browser, CLI `attach`, hub) | `agent`, `kind` (`claude` or `shell:N`) |
 | `hub.action` | Before an action the hub asked for, after this machine's own `hub.allow` check | `action`, `agent` |
 
@@ -60,7 +63,7 @@ Policies are synchronous so every code path can call them. Keep them fast; do sl
 
 ## Daemon events (listeners)
 
-`agent.created`, `agent.starting`, `agent.stopping`, `agent.message`, `agent.removed`, `hub.action`, each with the same `agent` summary and an `at` timestamp.
+`agent.created`, `agent.starting`, `agent.stopping`, `agent.message`, `agent.removed`, `agent.commit` (with `sha`), `agent.pr` (with `url`), `agent.merge`, `hub.action`, each with the same `agent` summary and an `at` timestamp.
 
 ## Engines
 
