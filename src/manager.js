@@ -124,6 +124,8 @@ export function repoCacheDir(repo) {
 export const NO_REPO = new Set(['general', 'assistant']);
 
 export function projectOf(agent) {
+  // Moved under another known project by hand.
+  if (agent.projectMove?.key) return { key: agent.projectMove.key, name: agent.projectMove.name, ...(agent.projectMove.full ? { full: agent.projectMove.full } : {}), source: 'moved' };
   if (agent.project) return { key: `custom:${agent.project.toLowerCase()}`, name: agent.project, source: 'custom' };
   if (agent.kind === 'general') return { key: 'general', name: 'General', source: 'general' };
   if (agent.kind === 'assistant') return { key: 'assistant', name: 'Assistant', source: 'assistant' };
@@ -369,6 +371,8 @@ export class AgentManager extends EventEmitter {
   /** Make sure the agent's project has a shortcut; remember where it lives for "add @cc". */
   registerProject(agent) {
     if (!agent || NO_REPO.has(agent.kind)) return null;
+    // A moved agent's repo says nothing about the project it was moved to.
+    if (agent.projectMove) return null;
     const info = projectOf(agent);
     if (info.key === 'other') return null;
     const reg = this.store.data.projects;
@@ -1207,8 +1211,28 @@ export class AgentManager extends EventEmitter {
 
   update(ref, fields) {
     const agent = this.mustGet(ref);
+    const bad = (m) => Object.assign(new Error(m), { status: 400 });
     const allowed = {};
-    for (const key of ['name', 'notes', 'permissionMode', 'model', 'project']) if (key in fields) allowed[key] = fields[key];
+    for (const key of ['notes']) if (key in fields) allowed[key] = fields[key];
+    if ('name' in fields) {
+      const name = String(fields.name ?? '').trim();
+      if (!name) throw bad('Name is required');
+      allowed.name = name.slice(0, 80);
+    }
+    // The request as recorded; the session only hears about a change when told.
+    if ('intent' in fields) {
+      const intent = String(fields.intent ?? '').trim();
+      if (!intent && !NO_REPO.has(agent.kind)) throw bad('The request is required');
+      allowed.intent = intent;
+    }
+    // Permission mode and model apply from the next launch.
+    if ('permissionMode' in fields) {
+      const mode = fields.permissionMode || null;
+      const modes = engineOf(agent).permissionModes;
+      if (mode && !modes.includes(mode)) throw bad(`${engineOf(agent).label} has no "${mode}" mode (use ${modes.join(', ')})`);
+      allowed.permissionMode = mode;
+    }
+    if ('model' in fields) allowed.model = String(fields.model ?? '').trim() || null;
     // Keep: clean up never closes or deletes it.
     if ('keep' in fields) allowed.keep = Boolean(fields.keep);
     if ('priority' in fields) {
@@ -1216,7 +1240,25 @@ export class AgentManager extends EventEmitter {
       if (p === null) throw Object.assign(new Error('priority must be P0, P1, P2 or P3'), { status: 400 });
       allowed.priority = p;
     }
-    if ('project' in allowed) allowed.project = String(allowed.project ?? '').trim() || null;
+    // Move: under a known project (shortcut or name), under a new project name, or back to its own ("").
+    if ('project' in fields) {
+      if (NO_REPO.has(agent.kind)) throw bad(`A ${agent.kind} session has no project`);
+      const ref = String(fields.project ?? '').trim();
+      const entry = ref ? this.resolveProject(ref) : null;
+      if (!ref) Object.assign(allowed, { project: null, projectMove: null });
+      else if (entry && entry.key !== projectOf({ ...agent, project: null, projectMove: null }).key) {
+        // Its full name (org/repo), as the project's own agents show it.
+        const info = this.store.list().map((a) => (a.projectMove ? null : projectOf(a))).find((i) => i?.key === entry.key);
+        Object.assign(allowed, { project: null, projectMove: { key: entry.key, name: entry.name, ...(info?.full ? { full: info.full } : {}), at: now() } });
+      } else if (entry) Object.assign(allowed, { project: null, projectMove: null });
+      else Object.assign(allowed, { project: ref.slice(0, 60), projectMove: null });
+    }
+    if ('intent' in allowed) {
+      const refs = extractRefs(allowed.intent, this.config.bugPatterns);
+      const bugs = { ...(agent.bugs ?? {}) };
+      for (const b of refs.bugs) bugs[b.key] ??= { ...b, source: 'intent' };
+      allowed.bugs = bugs;
+    }
     return this.view(this.patch(agent.id, allowed));
   }
 

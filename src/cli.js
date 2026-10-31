@@ -452,6 +452,42 @@ export async function main(argv) {
     });
 
   program
+    .command('edit')
+    .description("Change an agent's name, request, project, priority, permission mode or model")
+    .argument('<agent>')
+    .option('-n, --name <name>', 'display name')
+    .option('-i, --intent <text>', 'the request as recorded (add --tell to send it to the session too)')
+    .option('--tell', 'with --intent: also tell the agent about the changed request')
+    .option('--project <project>', 'move under this project (shortcut or name); "" for its own repo or folder')
+    .option('--priority <P0-P3>', 'priority')
+    .option('-p, --permission-mode <mode>', 'permission mode, from the next launch ("" for the default)')
+    .option('-m, --model <model>', 'model, from the next launch ("" for the default)')
+    .action(async (ref, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const patch = Object.fromEntries(
+        [['name', opts.name], ['intent', opts.intent], ['project', opts.project], ['priority', opts.priority], ['permissionMode', opts.permissionMode], ['model', opts.model]].filter(([, v]) => v !== undefined),
+      );
+      if (!Object.keys(patch).length) throw new Error('Nothing to change: give --name, --intent, --project, --priority, --permission-mode or --model');
+      const res = await api('PATCH', `/agents/${a.id}`, patch);
+      if (opts.tell && opts.intent) await api('POST', `/agents/${a.id}/tell`, { text: `The request changed. It is now:\n${opts.intent}` });
+      console.log(`${green('✓')} ${bold(res.name)} ${dim(res.id)}  ${res.projectInfo?.name ?? ''}  P${res.priority}${res.permissionMode ? `  ${res.permissionMode}` : ''}${res.model ? `  ${res.model}` : ''}`);
+      if (patch.permissionMode !== undefined || patch.model !== undefined) console.log(dim('Permission mode and model apply from its next launch.'));
+    });
+
+  program
+    .command('move')
+    .description('Move an agent under another project (shortcut or name); "" moves it back to its own')
+    .argument('<agent>')
+    .argument('<project>')
+    .action(async (ref, project) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const res = await api('PATCH', `/agents/${a.id}`, { project });
+      console.log(`${green('✓')} ${bold(res.name)} is now under ${bold(res.projectInfo?.full || res.projectInfo?.name)}`);
+    });
+
+  program
     .command('plan')
     .description('While the workspace is still being prepared, plan the task with Claude and attach')
     .argument('<agent>')

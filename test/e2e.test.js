@@ -2040,6 +2040,49 @@ test('clean up: closes idle agents, deletes long-closed ones, keeps Keep and uns
   }
 });
 
+test('edit an agent: name, request, priority, permission mode, model; move between projects and back', async () => {
+  const [d1, d2] = ['edit-alpha', 'edit-beta'].map((n) => path.join(home, n));
+  for (const d of [d1, d2]) fs.mkdirSync(d, { recursive: true });
+  const [a] = (await call('POST', '/agents', { intents: ['Alpha work'], dir: d1, start: false })).body;
+  const [b] = (await call('POST', '/agents', { intents: ['Beta work'], dir: d2, start: false })).body;
+  const ready = (id) => waitFor(async () => ((await agentNow(id)).status === 'stopped' ? agentNow(id) : null), 20000, `agent ${id} ready`);
+  const [ra, rb] = [await ready(a.id), await ready(b.id)];
+  const beta = (await call('GET', '/projects')).body.find((p) => p.key === rb.projectInfo.key);
+  assert.ok(beta, 'beta is a known project');
+
+  const moved = await call('PATCH', `/agents/${a.id}`, { project: `@${beta.shortcut}` });
+  assert.equal(moved.status, 200);
+  assert.equal(moved.body.projectInfo.key, rb.projectInfo.key);
+  assert.equal(moved.body.projectInfo.shortcut, beta.shortcut);
+  assert.equal(moved.body.workdir, ra.workdir, 'its code stays where it is');
+  assert.equal((await call('GET', '/projects')).body.find((p) => p.key === rb.projectInfo.key).agents, 2);
+  const back = (await call('PATCH', `/agents/${a.id}`, { project: '' })).body;
+  assert.equal(back.projectInfo.key, ra.projectInfo.key);
+  assert.equal((await call('PATCH', `/agents/${a.id}`, { project: 'Side quests' })).body.projectInfo.name, 'Side quests');
+  assert.equal((await call('PATCH', `/agents/${a.id}`, { project: '' })).body.projectInfo.key, ra.projectInfo.key);
+
+  assert.equal((await call('PATCH', `/agents/${a.id}`, { name: '  ' })).status, 400);
+  assert.equal((await call('PATCH', `/agents/${a.id}`, { intent: '' })).status, 400);
+  assert.equal((await call('PATCH', `/agents/${a.id}`, { permissionMode: 'yolo' })).status, 400);
+  const edited = (await call('PATCH', `/agents/${a.id}`, {
+    name: 'alpha-renamed',
+    intent: 'https://acme.atlassian.net/browse/OPS-5 Alpha work, now with paging',
+    priority: 'P1',
+    permissionMode: 'plan',
+    model: 'opus',
+  })).body;
+  assert.equal(edited.name, 'alpha-renamed');
+  assert.match(edited.intent, /now with paging/);
+  assert.ok(edited.bugs.some((x) => x.key === 'OPS-5'), 'links in the new request are tracked');
+  assert.equal(edited.priority, 1);
+  assert.equal(edited.permissionMode, 'plan');
+  assert.equal(edited.model, 'opus');
+  const cleared = (await call('PATCH', `/agents/${a.id}`, { permissionMode: '', model: '' })).body;
+  assert.equal(cleared.permissionMode, null);
+  assert.equal(cleared.model, null);
+  for (const x of [a, b]) await call('DELETE', `/agents/${x.id}`);
+});
+
 test('assistant: always-on session, check now, its agents marked, daily cap, one agent per issue, pause', async () => {
   const work = path.join(home, 'assistant-work');
   fs.mkdirSync(work, { recursive: true });
