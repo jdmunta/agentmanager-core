@@ -16,7 +16,8 @@ export const EVENT_DEFAULTS = {
   stuck: true, // going in circles: same failure, undoing its edits, or long stretches without changes
   conflict: true, // changing the same files as another agent in the same repo
   question: true, // asked a question in the decision inbox
-  assistant: true, // the assistant started an agent for new work
+  assistant: true, // an agent was started for new work (assistant, GitHub label, webhook)
+  budget: true, // an agent neared or reached its budget, or today's spend reached the daily limit
 };
 
 // Alerts the AI judge may hold for the digest or drop; the rest are always sent at once.
@@ -265,7 +266,7 @@ export class Notifier {
 
   deliver(kind, agent, what, n, urgency = null) {
     if (!n.enabled || !n.events[kind]) return;
-    const icon = { needsInput: ':raised_hand:', review: ':white_check_mark:', error: ':x:', waiting: ':hourglass_flowing_sand:', blocked: ':no_entry:', stuck: ':repeat:', conflict: ':crossed_swords:', question: ':question:', assistant: ':robot_face:' }[kind];
+    const icon = { needsInput: ':raised_hand:', review: ':white_check_mark:', error: ':x:', waiting: ':hourglass_flowing_sand:', blocked: ':no_entry:', stuck: ':repeat:', conflict: ':crossed_swords:', question: ':question:', assistant: ':robot_face:', budget: ':moneybag:' }[kind];
     const project = agent.projectInfo?.name ? ` (${agent.projectInfo.name})` : '';
     const link = this.linkFor(agent.id);
     const intent = n.includeIntent && agent.intent ? `\n> ${agent.intent.replace(/\s+/g, ' ').slice(0, 200)}` : '';

@@ -47,10 +47,12 @@ import { findLocalUrls, findSignInLinks, parseCallback, parseUrl } from './previ
 import { Plugins } from './plugins.js';
 import { leadPrompt, subagents, teamDir, teamPrompt } from './teams.js';
 import { assistantDir, assistantPrompt, assistantSettings } from './assistant.js';
+import { learnCommand, memoryKey, memoryPrompt, memoryText } from './memory.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
 import {
   bugFromRef,
   extractRefs,
+  landState,
   leadingJiraKey,
   prDetails,
   prFromUrl,
@@ -204,7 +206,7 @@ export class AgentManager extends EventEmitter {
     this.shells = new Map(); // agent id -> ancillary shell runtime in the agent's folder
     this.cursors = new Map(); // session id -> transcript scan cursor
     this.locks = new Map();
-    this.refreshing = new Set();
+    this.refreshing = new Map(); // agent id -> the refresh in progress
     this.lastPrCheck = new Map();
     this.changeSets = new Map(); // agent id -> { files, baseSha, at }: what its branch changed (conflict radar)
     this.conflicts = new Map(); // agent id -> [conflict]
@@ -283,7 +285,7 @@ export class AgentManager extends EventEmitter {
       usage,
       // Claude Code's own cost figure from the transcripts (absent until it records one).
       costUsd: costs.length ? costs.reduce((a, b) => a + b, 0) : null,
-      prs: Object.values(agent.prs ?? {}),
+      prs: Object.values(agent.prs ?? {}).map((p) => ({ ...p, land: landState(p) })),
       bugs: Object.values(agent.bugs ?? {}),
       conflicts: this.conflictGroups(agent),
       stuck: this.activeStuck(agent),
@@ -522,6 +524,7 @@ export class AgentManager extends EventEmitter {
     sessionId: adopt,
     imported,
     startedBy,
+    trigger,
   }) {
     intent = (intent ?? '').trim();
     const engineDef = engineOf(engine || this.config.engine || DEFAULT_ENGINE);
@@ -563,6 +566,7 @@ export class AgentManager extends EventEmitter {
       project: project?.trim() || null,
       priority: parsePriority(priority),
       ...(startedBy ? { startedBy } : {}),
+      ...(trigger ? { trigger } : {}),
       name: name?.trim() || jiraKey || slug,
       slug,
       intent,
@@ -891,6 +895,12 @@ export class AgentManager extends EventEmitter {
       prompts.push(agent.planReview.status === 'approved' ? planApprovedPrompt(file) : planReviewPrompt(file));
     }
     if (planning) prompts.push(planningPrompt(agent));
+    // What earlier agents learned in this repo, and the one command to add to it.
+    let allowedTools = null;
+    if (task && this.config.memory !== false) {
+      prompts.push(memoryPrompt(memoryText(memoryKey(agent))));
+      allowedTools = [`Bash(${learnCommand()}:*)`];
+    }
     if (agent.kind === 'assistant') {
       fs.mkdirSync(assistantDir(), { recursive: true });
       const dir = fs.realpathSync(assistantDir());
@@ -911,7 +921,7 @@ export class AgentManager extends EventEmitter {
       }
     }
     // Appended system prompts last only for the process they're passed to, so they go on every launch.
-    return { extra: engine.extraArgs(this.config), permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null, agents };
+    return { extra: engine.extraArgs(this.config), permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null, agents, allowedTools };
   }
 
   /** Spawn the agent's engine in a PTY, reusing its terminal clients and scrollback. */
@@ -1235,6 +1245,14 @@ export class AgentManager extends EventEmitter {
     if ('model' in fields) allowed.model = String(fields.model ?? '').trim() || null;
     // Keep: clean up never closes or deletes it.
     if ('keep' in fields) allowed.keep = Boolean(fields.keep);
+    if ('budgetUsd' in fields) {
+      // Its own spending limit in US dollars; empty for the default (budgets.perAgentUsd).
+      const raw = fields.budgetUsd;
+      const b = raw === null || raw === '' ? null : Number(raw);
+      if (b !== null && !(Number.isFinite(b) && b > 0)) throw Object.assign(new Error('budgetUsd must be a positive number of dollars, or empty'), { status: 400 });
+      allowed.budgetUsd = b === null ? null : Math.round(b * 100) / 100;
+      allowed.budgetHit = null;
+    }
     if ('priority' in fields) {
       const p = parsePriority(fields.priority, null);
       if (p === null) throw Object.assign(new Error('priority must be P0, P1, P2 or P3'), { status: 400 });
@@ -1971,80 +1989,93 @@ export class AgentManager extends EventEmitter {
 
   async refresh(ref, { withPrs = false } = {}) {
     const id = this.mustGet(ref).id;
-    if (this.refreshing.has(id)) return this.view(this.store.get(id));
-    this.refreshing.add(id);
+    const running = this.refreshing.get(id);
+    if (running) {
+      // A pull request check asked for during a plain refresh runs right after it.
+      if (!withPrs || running.withPrs) return running.promise.then(() => this.store.get(id) && this.view(this.store.get(id)));
+      await running.promise.catch(() => {});
+      return this.refresh(id, { withPrs });
+    }
+    const promise = this.doRefresh(id, { withPrs });
+    this.refreshing.set(id, { promise, withPrs });
     try {
-      this.reloadBrief(id);
-      const agent = this.store.get(id);
-      // Before handoff, a planning session's transcript lives in the planning folder.
-      const planningOnly = agent?.planning && !agent.planning.handedOffAt && !agent.workdir;
-      const sessionDir = planningOnly ? agent.planning.dir : agent?.workdir;
-      if (!sessionDir) return agent && this.view(agent);
-      let changed = agent.workdir ? this.adoptSessions(agent) : false;
-
-      const info = agent.workdir ? await git.gitInfo(agent.workdir) : agent.git;
-      if (!this.store.get(id)) return null;
-      if (info !== undefined && JSON.stringify({ ...info, updatedAt: 0 }) !== JSON.stringify({ ...agent.git, updatedAt: 0 })) {
-        agent.git = info;
-        changed = true;
-      }
-
-      const engine = engineOf(agent);
-      for (const session of agent.sessions) {
-        const file = engine.sessionFile(sessionDir, session.id);
-        const key = `${session.id}:${file}`; // the transcript moves at handoff; rescan the new copy
-        const cursor = this.cursors.get(key) ?? { offset: 0 };
-        this.cursors.set(key, cursor);
-        const res = engine.scan(file, cursor, this.config.bugPatterns);
-        const subMaps = engine.subagentFiles(sessionDir, session.id).map((sub) => {
-          const c = this.cursors.get(sub) ?? { offset: 0 };
-          this.cursors.set(sub, c);
-          engine.scan(sub, c);
-          return c.usage;
-        });
-        const usage = sumUsage(cursor.usage, ...subMaps);
-        if (usage.requests && JSON.stringify(session.usage) !== JSON.stringify(usage)) {
-          session.usage = usage;
-          changed = true;
-        }
-        for (const key of ['title', 'lastPrompt', 'cost', 'lastActivity', 'lastMessageAt']) {
-          if (res[key] != null && JSON.stringify(session[key]) !== JSON.stringify(res[key])) {
-            session[key] = res[key];
-            changed = true;
-          }
-        }
-        const prs = res.prs.map((p) => ({ ...p, sessionId: session.id }));
-        changed = this.mergeLinks(agent, agent.prs, prs, (p) => p.url) || changed;
-        changed = this.mergeLinks(agent, agent.bugs, res.bugs, (b) => b.key) || changed;
-      }
-
-      if (withPrs) {
-        this.lastPrCheck.set(id, Date.now());
-        // A shared worktree's pull requests belong to the agent that owns it.
-        const branchPrs = agent.sharedWith ? [] : await prsForBranch(agent.workdir, info?.branch);
-        changed = this.mergeLinks(agent, agent.prs, branchPrs, (p) => p.url) || changed;
-        // Fill in title/state for PRs we only know by URL, and keep open ones current.
-        const stale = Object.values(agent.prs).filter(
-          (p) => p.source !== 'branch' && (!p.state || p.state === 'OPEN'),
-        );
-        for (const pr of stale.slice(0, 10)) {
-          const d = await prDetails(pr.url);
-          if (d) changed = this.mergeLinks(agent, agent.prs, [{ ...d, source: pr.source }], (p) => p.url) || changed;
-        }
-      }
-
-      await this.updateChanges(agent);
-      this.updateStuck(agent, sessionDir);
-
-      if (changed && this.store.get(id)) {
-        agent.updatedAt = now();
-        this.store.save();
-        this.changed(agent);
-      }
-      return this.view(agent);
+      return await promise;
     } finally {
       this.refreshing.delete(id);
     }
+  }
+
+  async doRefresh(id, { withPrs }) {
+    this.reloadBrief(id);
+    const agent = this.store.get(id);
+    // Before handoff, a planning session's transcript lives in the planning folder.
+    const planningOnly = agent?.planning && !agent.planning.handedOffAt && !agent.workdir;
+    const sessionDir = planningOnly ? agent.planning.dir : agent?.workdir;
+    if (!sessionDir) return agent && this.view(agent);
+    let changed = agent.workdir ? this.adoptSessions(agent) : false;
+
+    const info = agent.workdir ? await git.gitInfo(agent.workdir) : agent.git;
+    if (!this.store.get(id)) return null;
+    if (info !== undefined && JSON.stringify({ ...info, updatedAt: 0 }) !== JSON.stringify({ ...agent.git, updatedAt: 0 })) {
+      agent.git = info;
+      changed = true;
+    }
+
+    const engine = engineOf(agent);
+    for (const session of agent.sessions) {
+      const file = engine.sessionFile(sessionDir, session.id);
+      const key = `${session.id}:${file}`; // the transcript moves at handoff; rescan the new copy
+      const cursor = this.cursors.get(key) ?? { offset: 0 };
+      this.cursors.set(key, cursor);
+      const res = engine.scan(file, cursor, this.config.bugPatterns);
+      const subMaps = engine.subagentFiles(sessionDir, session.id).map((sub) => {
+        const c = this.cursors.get(sub) ?? { offset: 0 };
+        this.cursors.set(sub, c);
+        engine.scan(sub, c);
+        return c.usage;
+      });
+      const usage = sumUsage(cursor.usage, ...subMaps);
+      if (usage.requests && JSON.stringify(session.usage) !== JSON.stringify(usage)) {
+        session.usage = usage;
+        changed = true;
+      }
+      for (const key of ['title', 'lastPrompt', 'cost', 'lastActivity', 'lastMessageAt']) {
+        if (res[key] != null && JSON.stringify(session[key]) !== JSON.stringify(res[key])) {
+          session[key] = res[key];
+          changed = true;
+        }
+      }
+      const prs = res.prs.map((p) => ({ ...p, sessionId: session.id }));
+      changed = this.mergeLinks(agent, agent.prs, prs, (p) => p.url) || changed;
+      changed = this.mergeLinks(agent, agent.bugs, res.bugs, (b) => b.key) || changed;
+    }
+
+    if (withPrs) {
+      this.lastPrCheck.set(id, Date.now());
+      // A shared worktree's pull requests belong to the agent that owns it.
+      const branchPrs = agent.sharedWith ? [] : await prsForBranch(agent.workdir, info?.branch);
+      changed = this.mergeLinks(agent, agent.prs, branchPrs, (p) => p.url) || changed;
+      // Fill in title/state for PRs we only know by URL, and keep open ones current.
+      const stale = Object.values(agent.prs).filter(
+        (p) => p.source !== 'branch' && (!p.state || p.state === 'OPEN'),
+      );
+      for (const pr of stale.slice(0, 10)) {
+        const d = await prDetails(pr.url);
+        if (d) changed = this.mergeLinks(agent, agent.prs, [{ ...d, source: pr.source }], (p) => p.url) || changed;
+      }
+      // Landing reacts to failing checks and requested changes.
+      this.emit('prs', agent);
+    }
+
+    await this.updateChanges(agent);
+    this.updateStuck(agent, sessionDir);
+
+    if (changed && this.store.get(id)) {
+      agent.updatedAt = now();
+      this.store.save();
+      this.changed(agent);
+    }
+    return this.view(agent);
   }
 
   // ------------------------------------------------------ telling an agent

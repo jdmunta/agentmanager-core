@@ -3,13 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // Never wait on a username/password prompt nobody can see; fail instead.
-const ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+const baseEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: '0' });
 
 const cancelled = () => Object.assign(new Error('Cancelled'), { cancelled: true });
 
 export function run(cmd, args, { cwd, timeout = 60_000, signal, env } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { cwd, timeout, signal, env: env ? { ...ENV, ...env } : ENV, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { cwd, timeout, signal, env: { ...baseEnv(), ...env }, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         if (signal?.aborted) return reject(cancelled());
         err.message = `${cmd} ${args.join(' ')} failed: ${(stderr || err.message).trim()}`;
@@ -57,7 +57,7 @@ function gitProgress(args, { cwd, signal, onProgress } = {}) {
   return new Promise((resolve, reject) => {
     // Own process group, so cancelling also kills git's helpers (git-remote-http etc.).
     // Killing only git leaves them holding stderr open, and 'close' would never come.
-    const child = spawn('git', args, { cwd, env: ENV, stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+    const child = spawn('git', args, { cwd, env: baseEnv(), stdio: ['ignore', 'ignore', 'pipe'], detached: true });
     const kill = () => {
       try {
         process.kill(-child.pid, 'SIGKILL');
@@ -332,7 +332,7 @@ export async function fullDiff(dir, baseSha, max = 400_000) {
     if (out.length > max) break;
     // --no-index exits 1 when the files differ, which is always here.
     const patch = await new Promise((resolve) =>
-      execFile('git', ['diff', '--no-color', '--no-index', '--', '/dev/null', f], { ...opts, env: ENV, maxBuffer: 10 * 1024 * 1024 }, (_e, stdout) => resolve(stdout ?? '')),
+      execFile('git', ['diff', '--no-color', '--no-index', '--', '/dev/null', f], { ...opts, env: baseEnv(), maxBuffer: 10 * 1024 * 1024 }, (_e, stdout) => resolve(stdout ?? '')),
     );
     out += `\n${patch}`;
   }

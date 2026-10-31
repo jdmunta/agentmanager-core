@@ -23,6 +23,7 @@
       <div class="top-actions">
         <input id="filter" type="search" placeholder="Filter agents" aria-label="Filter agents" />
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
+        <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
         <button id="cleanup-btn" title="Close agents idle for a while, and delete old closed ones">Clean up</button>
         <button id="alerts-btn" class="local-only" title="Slack alerts when an agent needs you">Alerts</button>
         <button id="remote-btn" class="local-only" title="Open AI Agent Manager from your phone">Remote access</button>
@@ -37,6 +38,7 @@
           <button class="side-tab active" data-tab="agents" role="tab">Agents</button>
           <button class="side-tab" data-tab="inbox" role="tab" title="Everything waiting on you: prompts, questions, stuck agents, overlaps">Inbox <span id="inbox-count" class="badge"></span></button>
           <button class="side-tab" data-tab="backlog" role="tab">Backlog <span id="backlog-count" class="badge"></span></button>
+          <button class="side-tab" data-tab="land" role="tab" title="Agents' open pull requests: what each needs to get merged">Land <span id="land-count" class="badge"></span></button>
         </div>
         <div id="agents-view">
           <div class="counts" id="counts"></div>
@@ -51,6 +53,7 @@
         </div>
         <div id="backlog-view" hidden></div>
         <div id="inbox-view" hidden></div>
+        <div id="land-view" hidden></div>
         <div id="empty" class="empty" hidden>
           <p>No agents yet.</p>
           <p>Add one or more intents and a repo or folder to get started.</p>
@@ -269,6 +272,8 @@
         </label>
         <p id="new-error" class="error" hidden></p>
         <div class="dialog-actions">
+          <button type="button" id="new-playbook" class="ghost" title="Keep this request to run again, in several projects or on a schedule">Save as playbook…</button>
+          <span class="spacer"></span>
           <button type="button" id="new-cancel" class="ghost">Cancel</button>
           <button type="submit" class="primary">Create agents</button>
         </div>
@@ -355,6 +360,15 @@
       <div id="team-body" class="race-body team-body"></div>
     </dialog>
 
+    <dialog id="review-dialog" class="doc-dialog review-dialog">
+      <div class="doc-head">
+        <h2 id="review-title">Review</h2>
+        <span class="spacer"></span>
+        <button type="button" id="review-close" class="small ghost">Close</button>
+      </div>
+      <div id="review-body" class="review-body"></div>
+    </dialog>
+
     <dialog id="race-dialog" class="doc-dialog">
       <div class="doc-head">
         <h2 id="race-title">Race</h2>
@@ -384,7 +398,8 @@
           <label class="check"><input type="checkbox" name="ev_stuck" /> seems stuck (same failure, undoing its edits, no progress)</label>
           <label class="check"><input type="checkbox" name="ev_conflict" /> changes the same files as another agent</label>
           <label class="check"><input type="checkbox" name="ev_question" /> asks a question in the inbox</label>
-          <label class="check"><input type="checkbox" name="ev_assistant" /> is started by the assistant for new work</label>
+          <label class="check"><input type="checkbox" name="ev_assistant" /> is started for new work (by the assistant, a GitHub label or a webhook)</label>
+          <label class="check"><input type="checkbox" name="ev_budget" /> nears or reaches its budget, or today's spend reaches the daily limit</label>
           <label class="check"><input type="checkbox" name="ev_waiting" /> finished its turn and is idle after <input name="waitingDelaySec" type="number" min="0" class="num" />s</label>
           <label class="check"><input type="checkbox" name="skipWhenWatching" /> not while I have its terminal open</label>
           <label class="check"><input type="checkbox" name="includeIntent" /> include the intent text in the message</label>
@@ -420,6 +435,7 @@
           <label>Permission mode <select name="permissionMode"></select></label>
           <label>Model <input name="model" placeholder="as configured" /></label>
         </div>
+        <label>Budget <span class="hint">US dollars; empty for the default limit</span><input name="budgetUsd" type="number" min="0.01" step="0.01" placeholder="default" /></label>
         <p class="hint" id="edit-hint">Moving changes only where the agent is listed; its code stays in its own repo and branch. Permission mode and model apply from its next launch.</p>
         <p id="edit-error" class="error" hidden></p>
         <div class="dialog-actions">
@@ -442,6 +458,7 @@
           <label class="check"><input type="checkbox" name="src_reviews" /> GitHub pull requests waiting for my review</label>
           <label class="check"><input type="checkbox" name="src_ci" /> Failing checks on my open pull requests</label>
           <label class="check"><input type="checkbox" name="src_slack" /> Slack messages to me that ask for work</label>
+          <label class="check"><input type="checkbox" name="src_linear" /> Linear issues newly assigned to me</label>
         </fieldset>
         <div class="row three">
           <label>Check every <span class="hint">minutes</span><input name="everyMin" type="number" min="1" /></label>
@@ -458,9 +475,124 @@
           <button type="button" id="assistant-check">Check now</button>
           <button type="button" id="assistant-pause">Pause</button>
           <button type="button" id="assistant-open" class="ghost">Open its session</button>
+          <button type="button" id="triggers-open" class="ghost" title="Start agents from GitHub labels, /agent PR comments and a webhook, with no session watching">Triggers…</button>
           <span class="spacer"></span>
           <button type="button" id="assistant-close" class="ghost">Close</button>
           <button id="assistant-save">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="triggers-dialog">
+      <form id="triggers-form" method="dialog" class="alerts-body">
+        <h2>Triggers</h2>
+        <p class="hint">Start agents from where the work is, with no model watching (no tokens spent on it). Agents started this way are marked <b>⚡ GitHub</b> or <b>⚡ webhook</b>.</p>
+        <fieldset>
+          <legend>GitHub label</legend>
+          <label class="check"><input type="checkbox" name="gh_enabled" /> Start an agent for each open issue with this label</label>
+          <div class="row">
+            <label>Label <input name="gh_label" placeholder="agentmgr" /></label>
+            <label>Check every <span class="hint">minutes</span><input name="gh_everyMin" type="number" min="1" /></label>
+          </div>
+          <label>In these repos <span class="hint">owner/name, comma or space separated</span><input name="gh_repos" placeholder="acme/web acme/api" /></label>
+          <label>Or any repo of these owners <input name="gh_owners" placeholder="acme" /></label>
+          <label class="check"><input type="checkbox" name="gh_comment" /> Comment on the issue that an agent is on it</label>
+        </fieldset>
+        <fieldset>
+          <legend>Pull request comments</legend>
+          <label class="check"><input type="checkbox" name="pc_enabled" /> Pass comments that start with <input name="pc_prefix" class="inline" placeholder="/agent" /> on an agent's pull request to that agent</label>
+          <p class="hint">Only from the repo's owners, members and collaborators.</p>
+        </fieldset>
+        <fieldset>
+          <legend>Webhook</legend>
+          <label class="check"><input type="checkbox" name="wh_enabled" /> Accept <code>POST /api/hooks/agents</code> with the token</label>
+          <div id="triggers-token" class="hint"></div>
+          <button type="button" id="triggers-newtoken" class="small">New token</button>
+          <label>Only these repos <span class="hint">optional</span><input name="wh_repos" /></label>
+        </fieldset>
+        <label>Agents started by triggers a day <span class="hint">at most</span><input name="maxPerDay" type="number" min="0" /></label>
+        <div id="triggers-status" class="hint"></div>
+        <p id="triggers-error" class="error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" id="triggers-poll">Check now</button>
+          <span class="spacer"></span>
+          <button type="button" id="triggers-close" class="ghost">Close</button>
+          <button class="primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="memory-dialog">
+      <form id="memory-form" method="dialog" class="alerts-body">
+        <h2>Repo memory</h2>
+        <p class="hint">What agents learned working in <b id="memory-repo"></b>. Every agent in this repo gets it when it starts, and adds to it with <code>agentmgr learn</code>. Tidy it here: keep it short and true.</p>
+        <textarea name="text" rows="14" class="memory-text" placeholder="- npm test needs a running Postgres: docker compose up db (you, 2026-10-31)"></textarea>
+        <p id="memory-meta" class="hint"></p>
+        <p id="memory-error" class="error" hidden></p>
+        <div class="dialog-actions">
+          <span class="spacer"></span>
+          <button type="button" id="memory-close" class="ghost">Cancel</button>
+          <button class="primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="playbooks-dialog" class="doc-dialog">
+      <div class="doc-head">
+        <h2>Playbooks</h2>
+        <span class="spacer"></span>
+        <button type="button" id="pb-new" class="small">+ New playbook</button>
+        <button type="button" id="pb-close" class="small ghost">Close</button>
+      </div>
+      <div class="race-body">
+        <p class="hint">Saved requests you run again, in one or more projects (one agent each), by hand or on a schedule. Write <code>{{name}}</code> for a value you fill in when it runs.</p>
+        <div id="pb-list"></div>
+        <form id="pb-form" class="alerts-body pb-form" hidden>
+          <input type="hidden" name="id" />
+          <label>Name <input name="name" required maxlength="80" placeholder="Upgrade a dependency" /></label>
+          <label>Request <textarea name="intent" rows="4" required placeholder="Upgrade {{package}} to the latest version, fix what breaks, run the tests and open a pull request."></textarea></label>
+          <label>Run in these projects <span class="hint">shortcuts, comma or space separated; one agent each</span><input name="projects" placeholder="web api" list="project-options" /></label>
+          <div id="pb-defaults"></div>
+          <div class="row three">
+            <label>Model <input name="model" placeholder="as configured" /></label>
+            <label>Permission mode <select name="permissionMode"><option value="">As configured</option><option value="acceptEdits">Accept edits</option><option value="plan">Plan</option><option value="auto">Auto</option><option value="bypassPermissions">Bypass permissions</option></select></label>
+            <label>Priority <select name="priority"><option value="0">P0</option><option value="1">P1</option><option value="2" selected>P2</option><option value="3">P3</option></select></label>
+          </div>
+          <div class="row three">
+            <label>Schedule <select name="every"><option value="">By hand only</option><option value="hour">Every hour</option><option value="day">Every day</option><option value="weekday">Every weekday</option><option value="week">Every week</option></select></label>
+            <label>At <input name="at" type="time" value="09:00" /></label>
+            <label>On <select name="day"><option value="mon">Monday</option><option value="tue">Tuesday</option><option value="wed">Wednesday</option><option value="thu">Thursday</option><option value="fri">Friday</option><option value="sat">Saturday</option><option value="sun">Sunday</option></select></label>
+          </div>
+          <label class="check"><input type="checkbox" name="enabled" checked /> Schedule on</label>
+          <p id="pb-error" class="error" hidden></p>
+          <div class="dialog-actions">
+            <button type="button" id="pb-delete" class="danger ghost">Delete</button>
+            <span class="spacer"></span>
+            <button type="button" id="pb-cancel" class="ghost">Cancel</button>
+            <button class="primary">Save</button>
+          </div>
+        </form>
+      </div>
+    </dialog>
+
+    <dialog id="spend-dialog">
+      <form id="spend-form" method="dialog" class="alerts-body">
+        <h2>Results <select id="stats-days" class="inline-select"><option value="7">last 7 days</option><option value="30" selected>last 30 days</option><option value="90">last 90 days</option><option value="0">all time</option></select></h2>
+        <div id="stats-body"></div>
+        <h3 class="spend-h">Spend</h3>
+        <div id="spend-summary"></div>
+        <div class="row">
+          <label>Each agent at most <span class="hint">US dollars; empty for no limit</span><input name="perAgentUsd" type="number" min="0.01" step="0.01" placeholder="no limit" /></label>
+          <label>All agents a day at most <span class="hint">US dollars</span><input name="perDayUsd" type="number" min="0.01" step="0.01" placeholder="no limit" /></label>
+        </div>
+        <p class="hint">At 80% of an agent's budget you get an alert; at its budget its session is closed until you raise it (Edit on the agent). At the daily limit no new agents start or resume until tomorrow; running ones go on.</p>
+        <div id="spend-agents"></div>
+        <p id="spend-note" class="hint"></p>
+        <p id="spend-error" class="error" hidden></p>
+        <div class="dialog-actions">
+          <span class="spacer"></span>
+          <button type="button" id="spend-close" class="ghost">Close</button>
+          <button class="primary">Save limits</button>
         </div>
       </form>
     </dialog>

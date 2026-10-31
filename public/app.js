@@ -4,6 +4,12 @@ import { marked } from '/vendor/marked/marked.esm.js';
 import DOMPurify from '/vendor/dompurify/purify.es.mjs';
 import { touchScroll } from '/touchscroll.js';
 import { openStream, post, REMOTE } from '/transport.js';
+import { initReview } from '/review.js';
+import { initLand, prChips } from '/land.js';
+import { initTriggers } from '/triggers.js';
+import { initSpend } from '/spend.js';
+import { initPlaybooks } from '/playbooks.js';
+import { initSetup } from '/setup.js';
 
 const $ = (sel) => document.querySelector(sel);
 const agents = new Map();
@@ -92,6 +98,19 @@ async function act(fn, okMsg) {
     toast(`Error: ${err.message}`, 5000);
   }
 }
+
+const reviewUi = initReview({ api, esc, toast, agents, $ });
+const triggersUi = initTriggers({ api, esc, toast, $ });
+initSpend({ api, esc, toast, $ });
+initSetup({ api, esc, $ });
+const playbooksUi = initPlaybooks({ api, esc, toast, $, select: (id) => (showTab('agents'), select(id)) });
+$('#new-playbook').onclick = () => {
+  const f = $('#new-form');
+  $('#new-dialog').close();
+  playbooksUi.open({ intent: f.intents.value.trim(), projects: f.project.value.trim() ? [f.project.value.trim()] : [], model: f.model.value.trim(), permissionMode: f.permissionMode.value });
+};
+$('#triggers-open').onclick = () => triggersUi.open();
+const landUi = initLand({ api, esc, toast, agents, $, select: (id) => (showTab('agents'), select(id)), openReview: (id) => reviewUi.open(id), isOpen: () => sideTab === 'land' });
 
 function statusOf(a) {
   if (a.runtime.planning) return a.runtime.attention ? 'attention' : 'planning';
@@ -605,7 +624,7 @@ function agentItem(a) {
   const idle = !isActive(a);
   return `<li data-id="${a.id}" class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''}">
     <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
-    <div class="intent">${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${esc(a.intent || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
+    <div class="intent">${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${esc(a.intent || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
     <div class="meta">
       <span class="mono">${a.id}</span>
@@ -759,6 +778,7 @@ function renderBacklog() {
       <span class="spacer"></span>
       <button class="link" data-bl="toggle-run" title="${backlogState.autoRun ? 'Stop starting new items (running ones continue)' : 'Start picking up queued items again'}">${backlogState.autoRun ? '⏸ Pause' : '▶ Resume'}</button>
       <button class="link" data-bl="add">+ Add</button>
+      <button class="link" data-bl="playbooks" title="Saved requests you run again, by hand or on a schedule">Playbooks</button>
     </div>
     ${!backlogState.autoRun ? '<p class="hint bl-paused">Paused: queued items wait until you resume.</p>' : ''}
     ${items.length
@@ -807,7 +827,9 @@ function showTab(tab) {
   $('#agents-view').hidden = tab !== 'agents';
   $('#backlog-view').hidden = tab !== 'backlog';
   $('#inbox-view').hidden = tab !== 'inbox';
+  $('#land-view').hidden = tab !== 'land';
   if (tab === 'inbox') loadJudge();
+  if (tab === 'land') landUi.load();
   renderBacklog();
   renderInbox();
 }
@@ -830,6 +852,8 @@ $('#backlog-view').addEventListener('click', async (e) => {
       return blApi('POST', '/backlog/settings', { autoRun: !backlogState.autoRun });
     case 'add':
       return openNewDialog('backlog');
+    case 'playbooks':
+      return playbooksUi.open();
     case 'limit': {
       const n = prompt(`How many "${el.dataset.name}" items should agents work on at once?`, el.textContent.split(' ')[0]);
       if (n === null) return;
@@ -1508,6 +1532,7 @@ function prRow(a, p) {
     <a class="grow" href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(p.url)}">${label} ${esc(p.title ?? p.repo ?? p.url)}</a>
     <span class="tag" title="How this was found">${esc(p.source)}</span>
     <button class="link" data-unlink="pr" data-key="${esc(p.url)}" title="Remove">✕</button>
+    ${p.state === 'OPEN' && (p.checks || p.review || p.mergeState) ? `<div class="pr-chips">${prChips(p, esc)}</div>` : ''}
   </li>`;
 }
 
@@ -1563,6 +1588,7 @@ function renderDetail() {
             : `<button data-act="start" ${a.status === 'preparing' ? 'disabled' : ''}>Resume in background</button>`}
         <button data-act="fresh" ${running || a.status === 'preparing' ? 'disabled' : ''} title="Start over with a new session ID (old ones are kept)">New session</button>
         <button data-act="shell" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="A separate terminal in this agent's folder for running commands by hand">Open shell</button>
+        ${noRepo(a) ? '' : `<button data-act="changes" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Read its changes, comment on lines for the agent, commit and open a pull request">Review changes${a.git?.dirtyFiles ? ` <span class="count">${a.git.dirtyFiles}</span>` : ''}</button>`}
         <button data-act="fork" ${a.workdir && a.git?.branch ? '' : 'disabled'} title="A new agent with this one's code and conversation, in its own worktree, to try another approach">Fork</button>
         <button data-act="edit" title="Change its name, request, project, priority, permission mode or model">Edit</button>
         <button data-act="refresh" title="Re-scan git, PRs and transcripts">Refresh</button>
@@ -1620,7 +1646,7 @@ function renderDetail() {
                     <br>${fmtTokens(u.total)} total incl. cache · ${u.requests} requests</div>`
                  : ''}`
             : '—'}</dd>
-          <dt>Cost</dt><dd>${totalCost ? `$${totalCost.toFixed(2)} <span class="hint">(reported by Claude Code)</span>` : '—'}</dd>
+          <dt>Cost</dt><dd>${totalCost ? `$${totalCost.toFixed(2)}${a.budgetUsd ? ` of its $${a.budgetUsd.toFixed(2)} budget` : ''} <span class="hint">(reported by Claude Code)</span>` : a.budgetUsd ? `— <span class="hint">budget $${a.budgetUsd.toFixed(2)}</span>` : '—'}${a.budgetHit ? ' <span class="tag fail" title="Its session was closed at its budget; raise it in Edit to continue">budget reached</span>' : ''}</dd>
           <dt>Mode</dt><dd>${esc(a.permissionMode)}${a.model ? ` · ${esc(a.model)}` : ''}</dd>
         </dl>
       </div>
@@ -1635,6 +1661,7 @@ function renderDetail() {
           <dt>Head</dt><dd>${a.git?.head ? `<code>${esc(a.git.head.sha)}</code> ${esc(a.git.head.subject)}` : '—'}</dd>
           ${a.baseRef ? `<dt>Branched from</dt><dd><code>${esc(a.baseRef)}</code></dd>` : ''}
           ${a.worktree ? `<dt>Worktree of</dt><dd><code>${esc(a.sourceDir)}</code></dd>` : ''}
+          ${noRepo(a) ? '' : `<dt>Repo memory</dt><dd><button class="link" data-act="memory" title="What agents learned working in this repo; every agent here gets it">View and edit</button></dd>`}
         </dl>
       </div>
 
@@ -1699,6 +1726,7 @@ function renderDetail() {
 function render() {
   renderList();
   renderBacklog();
+  landUi.render();
   renderInbox();
   renderRace();
   renderTeam();
@@ -2906,6 +2934,10 @@ $('#detail-body').addEventListener('click', async (e) => {
     case 'shell':
       term.open(a.id, 'shell:1');
       break;
+    case 'changes':
+      return reviewUi.open(a.id);
+    case 'memory':
+      return openMemory(a);
     case 'fork':
       forkAgent(a.id);
       break;
@@ -3511,6 +3543,34 @@ let enginesCache = null;
 // The project picked in the dialog: "" while it is listed under its own repo or folder.
 const editProject = (a) => (a.projectMove || a.project ? (a.projectInfo?.shortcut ?? '') : '');
 
+let memoryAgent = null;
+async function openMemory(a) {
+  memoryAgent = a.id;
+  const f = $('#memory-form');
+  $('#memory-error').hidden = true;
+  try {
+    const m = await api('GET', `/agents/${a.id}/memory`);
+    $('#memory-repo').textContent = a.projectInfo?.full || a.projectInfo?.name || a.repo || 'this repo';
+    f.text.value = m.text;
+    $('#memory-meta').textContent = `${m.entries} learning${m.entries === 1 ? '' : 's'} · ${(m.bytes / 1000).toFixed(1)} of ${m.max / 1000} KB`;
+    $('#memory-dialog').showModal();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 5000);
+  }
+}
+$('#memory-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('PUT', `/agents/${memoryAgent}/memory`, { text: $('#memory-form').text.value });
+    $('#memory-dialog').close();
+    toast('Saved; agents get it from their next start');
+  } catch (err) {
+    $('#memory-error').hidden = false;
+    $('#memory-error').textContent = err.message;
+  }
+});
+$('#memory-close').onclick = () => $('#memory-dialog').close();
+
 async function openEdit(a, focus) {
   editing = a;
   const f = $('#edit-form');
@@ -3519,6 +3579,7 @@ async function openEdit(a, focus) {
   f.tell.checked = false;
   f.priority.value = String(a.priority ?? 2);
   f.model.value = a.model ?? '';
+  f.budgetUsd.value = a.budgetUsd ?? '';
   $('#edit-project-row').hidden = noRepo(a);
   $('#edit-tell-row').hidden = !a.intent;
   // Its own repo or folder, every known project, or a new name.
@@ -3554,6 +3615,7 @@ $('#edit-form').addEventListener('submit', async (e) => {
   if (Number(f.priority.value) !== (a.priority ?? 2)) patch.priority = Number(f.priority.value);
   if ((f.permissionMode.value || null) !== (a.permissionMode ?? null)) patch.permissionMode = f.permissionMode.value || null;
   if ((f.model.value.trim() || null) !== (a.model ?? null)) patch.model = f.model.value.trim() || null;
+  if ((f.budgetUsd.value === '' ? null : Number(f.budgetUsd.value)) !== (a.budgetUsd ?? null)) patch.budgetUsd = f.budgetUsd.value === '' ? null : Number(f.budgetUsd.value);
   if (!noRepo(a)) {
     const target = f.project.value === '__new' ? f.newProject.value.trim() : f.project.value;
     const was = editProject(a);
@@ -3578,7 +3640,7 @@ $('#edit-form').addEventListener('submit', async (e) => {
 
 // ------------------------------------------------------------------ assistant
 
-const ASSISTANT_SOURCES = ['jira', 'comments', 'reviews', 'ci', 'slack'];
+const ASSISTANT_SOURCES = ['jira', 'comments', 'reviews', 'ci', 'slack', 'linear'];
 let assistantState = null;
 
 function renderAssistantDot() {

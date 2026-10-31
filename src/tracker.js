@@ -72,8 +72,9 @@ export function recentSessionFiles(cwd, sinceMs) {
 const URL_TOKEN = /https?:\/\/[^\s"'<>`\\)\]]+/g;
 const PR_PATH = /^https?:\/\/[\w.-]+\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/;
 const GH_ISSUE_PATH = /^https?:\/\/[\w.-]+\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)(?:[/?#]|$)/;
-// Jira keys in links: /browse/KEY-1, ?selectedIssue=KEY-1 (boards, Polaris ideas), /issues/KEY-1.
-const JIRA_KEY = /(?:\/browse\/|[?&]selectedIssue=|\/issues\/)([A-Z][A-Z0-9_]+-\d+)\b/;
+// Issue keys in links: Jira /browse/KEY-1 and ?selectedIssue=KEY-1 (boards, Polaris ideas),
+// /issues/KEY-1, and Linear /issue/KEY-1.
+const JIRA_KEY = /(?:\/browse\/|[?&]selectedIssue=|\/issues?\/)([A-Z][A-Z0-9_]+-\d+)\b/;
 
 const trimUrl = (url) => url.replace(/[.,;:!?'"]+$/, '');
 
@@ -95,7 +96,7 @@ export function bugFromRef(ref, source) {
   return { key: ref, url: null, source };
 }
 
-/** The Jira key when the text starts with a Jira link ("https://x.atlassian.net/browse/ABC-1 fix it" → "ABC-1"). */
+/** The issue key when the text starts with a Jira or Linear link ("https://x.atlassian.net/browse/ABC-1 fix it" → "ABC-1"). */
 export function leadingJiraKey(text) {
   const first = String(text ?? '').trimStart().match(/^<?(https?:\/\/\S+)/);
   return first?.[1].match(JIRA_KEY)?.[1] ?? null;
@@ -218,17 +219,69 @@ export function scanTranscript(file, cursor, bugPatterns = []) {
   return result;
 }
 
+/** The gh CLI to run (AGENTMGR_GH_BIN points the tests at a fake one). */
+export const ghBin = () => process.env.AGENTMGR_GH_BIN || 'gh';
+
+const PR_FIELDS = 'number,title,url,state,isDraft,headRefOid,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup,createdAt,mergedAt';
+const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE']);
+const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
+
+/** gh's statusCheckRollup -> { state: passed|failed|running|none, failed: [names], running, total } */
+export function checkSummary(rollup) {
+  const list = Array.isArray(rollup) ? rollup : [];
+  const failed = [];
+  let running = 0;
+  for (const c of list) {
+    // Check runs have status/conclusion; commit statuses have state.
+    const result = c.conclusion || (c.status && c.status !== 'COMPLETED' ? 'PENDING' : null) || c.state || 'PENDING';
+    if (FAILED.has(result)) failed.push(c.name || c.context || 'check');
+    else if (!PASSED.has(result)) running += 1;
+  }
+  const state = !list.length ? 'none' : failed.length ? 'failed' : running ? 'running' : 'passed';
+  return { state, failed: failed.slice(0, 10), running, total: list.length };
+}
+
+/** Where a pull request stands on its way in: merged, closed, draft, fix, behind, ready or waiting. */
+export function landState(pr) {
+  if (!pr?.state) return null;
+  if (pr.state === 'MERGED') return 'merged';
+  if (pr.state === 'CLOSED') return 'closed';
+  if (pr.isDraft) return 'draft';
+  const checks = pr.checks?.state;
+  if (checks === 'failed' || pr.review === 'CHANGES_REQUESTED' || pr.mergeable === 'CONFLICTING' || pr.mergeState === 'DIRTY') return 'fix';
+  if (pr.mergeState === 'BEHIND') return 'behind';
+  if (checks === 'running') return 'waiting';
+  if (pr.mergeState === 'CLEAN' || pr.mergeState === 'HAS_HOOKS' || pr.mergeState === 'UNSTABLE') return 'ready';
+  if (pr.review === 'APPROVED' && pr.mergeable === 'MERGEABLE') return 'ready';
+  return 'waiting';
+}
+
+/** Keep what we use from gh's PR JSON, small enough to store per agent. */
+export function compactPr(p) {
+  if (!p) return p;
+  const { statusCheckRollup, reviewDecision, mergeStateStatus, headRefOid, mergeable, createdAt, mergedAt, ...rest } = p;
+  const out = { ...rest };
+  if (createdAt) out.openedAt = createdAt;
+  if (mergedAt) out.mergedAt = mergedAt;
+  if (statusCheckRollup !== undefined) out.checks = checkSummary(statusCheckRollup);
+  if (reviewDecision !== undefined) out.review = reviewDecision || null;
+  if (mergeable !== undefined) out.mergeable = mergeable || null;
+  if (mergeStateStatus !== undefined) out.mergeState = mergeStateStatus || null;
+  if (headRefOid) out.head = headRefOid;
+  return out;
+}
+
 /** PRs whose head is `branch`, via the gh CLI. Returns [] when gh is missing or unauthenticated. */
 export async function prsForBranch(cwd, branch) {
   if (process.env.AGENTMGR_NO_GH) return [];
   if (!branch || branch === 'HEAD' || ['main', 'master', 'develop', 'trunk'].includes(branch)) return [];
   try {
     const out = await run(
-      'gh',
-      ['pr', 'list', '--head', branch, '--state', 'all', '--limit', '20', '--json', 'number,title,url,state,isDraft'],
+      ghBin(),
+      ['pr', 'list', '--head', branch, '--state', 'all', '--limit', '20', '--json', PR_FIELDS],
       { cwd, timeout: 30_000 },
     );
-    return JSON.parse(out || '[]').map((p) => ({ ...prFromUrl(p.url, 'branch'), ...p }));
+    return JSON.parse(out || '[]').map((p) => ({ ...prFromUrl(p.url, 'branch'), ...compactPr(p) }));
   } catch {
     return [];
   }
@@ -238,8 +291,8 @@ export async function prsForBranch(cwd, branch) {
 export async function prDetails(url) {
   if (process.env.AGENTMGR_NO_GH) return null;
   try {
-    const out = await run('gh', ['pr', 'view', url, '--json', 'number,title,url,state,isDraft'], { timeout: 30_000 });
-    return JSON.parse(out);
+    const out = await run(ghBin(), ['pr', 'view', url, '--json', PR_FIELDS], { timeout: 30_000 });
+    return compactPr(JSON.parse(out));
   } catch {
     return null;
   }

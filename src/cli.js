@@ -462,13 +462,14 @@ export async function main(argv) {
     .option('--priority <P0-P3>', 'priority')
     .option('-p, --permission-mode <mode>', 'permission mode, from the next launch ("" for the default)')
     .option('-m, --model <model>', 'model, from the next launch ("" for the default)')
+    .option('--budget <usd>', 'its spending limit in US dollars ("" for the default)')
     .action(async (ref, opts) => {
       await daemon();
       const a = await resolveAgent(ref);
       const patch = Object.fromEntries(
-        [['name', opts.name], ['intent', opts.intent], ['project', opts.project], ['priority', opts.priority], ['permissionMode', opts.permissionMode], ['model', opts.model]].filter(([, v]) => v !== undefined),
+        [['name', opts.name], ['intent', opts.intent], ['project', opts.project], ['priority', opts.priority], ['permissionMode', opts.permissionMode], ['model', opts.model], ['budgetUsd', opts.budget === undefined ? undefined : opts.budget === '' ? null : Number(opts.budget)]].filter(([, v]) => v !== undefined),
       );
-      if (!Object.keys(patch).length) throw new Error('Nothing to change: give --name, --intent, --project, --priority, --permission-mode or --model');
+      if (!Object.keys(patch).length) throw new Error('Nothing to change: give --name, --intent, --project, --priority, --permission-mode, --model or --budget');
       const res = await api('PATCH', `/agents/${a.id}`, patch);
       if (opts.tell && opts.intent) await api('POST', `/agents/${a.id}/tell`, { text: `The request changed. It is now:\n${opts.intent}` });
       console.log(`${green('✓')} ${bold(res.name)} ${dim(res.id)}  ${res.projectInfo?.name ?? ''}  P${res.priority}${res.permissionMode ? `  ${res.permissionMode}` : ''}${res.model ? `  ${res.model}` : ''}`);
@@ -485,6 +486,295 @@ export async function main(argv) {
       const a = await resolveAgent(ref);
       const res = await api('PATCH', `/agents/${a.id}`, { project });
       console.log(`${green('✓')} ${bold(res.name)} is now under ${bold(res.projectInfo?.full || res.projectInfo?.name)}`);
+    });
+
+  program
+    .command('changes')
+    .description("An agent's changes since its branch started: files, commits and the diff")
+    .argument('<agent>')
+    .option('--stat', 'files and counts only, no diff')
+    .action(async (ref, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const c = await api('GET', `/agents/${a.id}/changes`);
+      console.log(`${bold(c.name)}  ${c.branch}${c.base ? ` ← ${c.base.ref}` : ''}  ${c.commits.length} commit(s)${c.uncommitted ? yellow(`  ${c.uncommitted} uncommitted`) : ''}${c.unpushed ? yellow(`  ${c.unpushed} not pushed`) : ''}`);
+      for (const f of c.files) console.log(`  ${green(`+${f.added ?? '?'}`)} ${red(`-${f.removed ?? '?'}`)}  ${f.path}${f.status !== 'modified' ? dim(` (${f.status})`) : ''}`);
+      if (!c.files.length) console.log(dim('  No changes yet.'));
+      if (!opts.stat && c.diff) console.log(`\n${c.diff}`);
+    });
+
+  program
+    .command('comment')
+    .description('Send review comments to an agent as one message: --at file:line=text (repeatable) and -m')
+    .argument('<agent>')
+    .option('--at <file:line=text>', 'a line comment, e.g. "src/a.js:42=Use const here"', (v, all) => [...all, v], [])
+    .option('-m, --message <text>', 'an overall comment')
+    .action(async (ref, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const comments = opts.at.map((x) => {
+        const m = /^(.+?):(\d+)=(.+)$/s.exec(x);
+        if (!m) throw new Error(`--at wants file:line=text, got "${x}"`);
+        return { file: m[1], line: Number(m[2]), side: 'new', text: m[3] };
+      });
+      const r = await api('POST', `/agents/${a.id}/changes/comments`, { comments, note: opts.message ?? '' });
+      console.log(`${green('✓')} sent ${r.sent} comment(s) to ${bold(a.name)}`);
+    });
+
+  program
+    .command('commit')
+    .description("Commit everything in an agent's worktree, new files included, as you")
+    .argument('<agent>')
+    .requiredOption('-m, --message <text>', 'commit message')
+    .action(async (ref, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const r = await api('POST', `/agents/${a.id}/changes/commit`, { message: opts.message });
+      console.log(`${green('✓')} ${r.sha}  ${r.files} file(s)`);
+    });
+
+  program
+    .command('pr')
+    .description("Push an agent's branch and open a pull request with gh (or push to the one already open)")
+    .argument('<agent>')
+    .option('-t, --title <title>', 'title (default: from the commits)')
+    .option('-b, --body <text>', 'description')
+    .option('--draft', 'open it as a draft')
+    .action(async (ref, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const r = await api('POST', `/agents/${a.id}/changes/pr`, { title: opts.title ?? '', body: opts.body ?? '', draft: Boolean(opts.draft) });
+      console.log(`${green('✓')} ${r.existing ? 'pushed to' : 'opened'} ${r.url ?? '(no URL printed by gh)'}`);
+    });
+
+  program
+    .command('stats')
+    .description('Results across agents: merge rate, time to a first PR and to merge, cost per merged PR, by engine and model')
+    .option('-d, --days <n>', 'agents created in the last n days (0: all)', '30')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      const st = await api('GET', `/stats?days=${Number(opts.days) || 0}`);
+      if (opts.json) return console.log(JSON.stringify(st, null, 2));
+      const t = st.total;
+      const pct = (r) => (r == null ? '—' : `${Math.round(r * 100)}%`);
+      const hrs = (h) => (h == null ? '—' : `${h}h`);
+      const m = (n) => (n == null ? '—' : `$${n.toFixed(2)}`);
+      console.log(`${bold(`Last ${st.days || 'all'} days`)}: ${t.agents} agents, ${t.withPr} opened a PR, ${t.merged} merged, ${t.closed} closed, ${t.open} open`);
+      console.log(`merge rate ${bold(pct(t.mergeRate))} · median to first PR ${hrs(t.medianHoursToPr)} · to merge ${hrs(t.medianHoursToMerge)} · ${m(t.costPerMerged)} per merged PR (${m(t.cost)} in all)`);
+      for (const [title, rows] of [['By engine and model', st.byEngine], ['By source', st.bySource]]) {
+        console.log(`\n${bold(title)}`);
+        for (const r of rows) console.log(`  ${r.key.padEnd(24)} ${String(r.agents).padStart(4)} agents  ${String(r.merged).padStart(3)} merged  ${pct(r.mergeRate).padStart(4)}  ${m(r.costPerMerged)}/merged`);
+      }
+    });
+
+  program
+    .command('spend')
+    .description('What agents cost today and lately, and spending limits')
+    .option('--per-agent <usd>', 'limit for each agent ("" for none)')
+    .option('--per-day <usd>', 'limit for all agents a day ("" for none)')
+    .action(async (opts) => {
+      await daemon();
+      const patch = {};
+      if (opts.perAgent !== undefined) patch.perAgentUsd = opts.perAgent === '' ? null : Number(opts.perAgent);
+      if (opts.perDay !== undefined) patch.perDayUsd = opts.perDay === '' ? null : Number(opts.perDay);
+      const b = Object.keys(patch).length ? await api('PUT', '/budgets', patch) : await api('GET', '/budgets');
+      const m = (n) => `$${Number(n ?? 0).toFixed(2)}`;
+      console.log(`${bold('Today')}: ${m(b.today.total)}${b.perDayUsd ? ` of ${m(b.perDayUsd)}` : ''}   ${dim(`each agent at most ${b.perAgentUsd ? m(b.perAgentUsd) : 'no limit'}`)}`);
+      for (const d of b.days.slice(1, 8)) console.log(dim(`  ${d.day}  ${m(d.total)}`));
+      for (const a of b.agents.slice(0, 15)) console.log(`  ${m(a.cost).padStart(8)}  ${bold(a.name)}${a.limit ? dim(`  budget ${m(a.limit)}`) : ''}${a.hit ? red('  reached') : ''}`);
+      console.log(dim(b.note));
+    });
+
+  program
+    .command('learn')
+    .description("Add one line to the shared memory of an agent's repo (agents run this themselves)")
+    .argument('<text>', 'the learning, one short line')
+    .option('-a, --agent <agent>', 'which agent (default: the agent this runs in)')
+    .action(async (text, o) => {
+      await daemon();
+      const ref = o.agent ?? process.env.AGENTMGR_AGENT_ID;
+      if (!ref) throw new Error('Say which agent with --agent (outside an agent there is no default)');
+      const a = await resolveAgent(ref);
+      const r = await api('POST', `/agents/${a.id}/learn`, { text });
+      console.log(r.added ? `${green('✓')} remembered for ${r.key} (${r.entries} learnings)` : dim('Already in the memory.'));
+    });
+
+  program
+    .command('memory')
+    .description("Show the shared memory of an agent's repo (what agents learned there)")
+    .argument('<agent>')
+    .option('--clear', 'empty it')
+    .action(async (ref, o) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const r = o.clear ? await api('PUT', `/agents/${a.id}/memory`, { text: '' }) : await api('GET', `/agents/${a.id}/memory`);
+      console.log(dim(`${r.file} · ${r.entries} learnings · ${r.bytes} of ${r.max} bytes`));
+      if (r.text) console.log(r.text.trimEnd());
+    });
+
+  const pb = program.command('playbook').description('Saved requests you run again, in several projects, by hand or on a schedule');
+  pb.command('ls', { isDefault: true })
+    .description('List playbooks')
+    .action(async () => {
+      await daemon();
+      const list = await api('GET', '/playbooks');
+      for (const p of list) {
+        const sched = p.schedule ? `${p.schedule.every} at ${p.schedule.at}${p.schedule.day ? ` (${p.schedule.day})` : ''}${p.enabled ? '' : ' (off)'}` : 'by hand';
+        console.log(`${dim(p.id)}  ${bold(p.name)}  ${p.projects.map((x) => `@${x}`).join(' ')}  ${dim(sched)}${p.nextRunAt ? dim(`  next ${p.nextRunAt.slice(0, 16).replace('T', ' ')}`) : ''}`);
+      }
+      if (!list.length) console.log(dim('No playbooks yet: agentmgr playbook add'));
+    });
+  pb.command('add')
+    .description('Save a playbook: a request ({{name}} for values filled in at run time) and the projects to run it in')
+    .argument('<name>')
+    .argument('<request>')
+    .requiredOption('--projects <list>', 'project shortcuts, comma separated (one agent each)')
+    .option('-m, --model <model>', 'model')
+    .option('-p, --permission-mode <mode>', 'permission mode')
+    .option('--every <when>', 'schedule: hour, day, weekday or week')
+    .option('--at <HH:MM>', 'schedule time (minute past the hour for "hour")', '09:00')
+    .option('--day <day>', 'for "week": mon..sun', 'mon')
+    .option('--default <name=value>', 'default value for a {{placeholder}} (repeatable)', (v, all) => [...all, v], [])
+    .action(async (name, intent, o) => {
+      await daemon();
+      const defaults = Object.fromEntries(o.default.map((x) => x.split(/=(.*)/s).slice(0, 2)));
+      const p = await api('POST', '/playbooks', { name, intent, projects: o.projects, model: o.model, permissionMode: o.permissionMode, defaults, schedule: o.every ? { every: o.every, at: o.at, day: o.day } : null });
+      console.log(`${green('✓')} ${bold(p.name)} ${dim(p.id)}${p.nextRunAt ? `  next run ${p.nextRunAt}` : ''}`);
+    });
+  pb.command('run')
+    .description('Run a playbook now')
+    .argument('<playbook>', 'id or name')
+    .option('--var <name=value>', 'a {{placeholder}} value (repeatable)', (v, all) => [...all, v], [])
+    .action(async (ref, o) => {
+      await daemon();
+      const vars = Object.fromEntries(o.var.map((x) => x.split(/=(.*)/s).slice(0, 2)));
+      const r = await api('POST', `/playbooks/${encodeURIComponent(ref)}/run`, { vars });
+      for (const a of r.agents) console.log(`${green('✓')} ${bold(a.name)} ${dim(a.id)}  @${a.project}`);
+      for (const x of r.failed) console.log(`${red('!')} @${x.project}: ${x.reason}`);
+    });
+  pb.command('rm')
+    .description('Delete a playbook (its agents stay)')
+    .argument('<playbook>', 'id or name')
+    .action(async (ref) => {
+      await daemon();
+      await api('DELETE', `/playbooks/${encodeURIComponent(ref)}`);
+      console.log(`${green('✓')} deleted`);
+    });
+
+  const trig = program.command('triggers').description('Start agents from GitHub labels, /agent PR comments and a webhook (no tokens spent watching)');
+  trig
+    .command('status', { isDefault: true })
+    .description('What is on, and what triggers started lately')
+    .action(async () => {
+      await daemon();
+      const t = await api('GET', '/triggers');
+      console.log(`${bold('GitHub label')}: ${t.github.enabled ? green('on') : dim('off')}  "${t.github.label}" in ${[...t.github.repos, ...t.github.owners.map((o) => `${o}/*`)].join(', ') || dim('(no repos)')} every ${t.github.everyMin} min`);
+      console.log(`${bold('PR comments')}: ${t.prCommands.enabled ? green('on') : dim('off')}  "${t.prCommands.prefix} …" from owners, members, collaborators`);
+      console.log(`${bold('Webhook')}: ${t.webhook.enabled ? green('on') : dim('off')}  POST /api/hooks/agents${t.webhook.hasToken ? '' : dim('  (no token: agentmgr triggers set --new-token)')}`);
+      console.log(dim(`${t.startedToday} started in the last day (at most ${t.maxPerDay}); last check ${t.lastPoll?.at ?? 'never'}${t.lastError ? `; error: ${t.lastError.message}` : ''}`));
+      for (const r of t.recent.slice(0, 10)) console.log(`  ${r.at.slice(0, 16).replace('T', ' ')}  ${bold(r.name)}  ${r.source}${r.url ? `  ${dim(r.url)}` : ''}`);
+    });
+  trig
+    .command('poll')
+    .description('Check GitHub now')
+    .action(async () => {
+      await daemon();
+      const r = await api('POST', '/triggers/poll');
+      console.log(`${r.issues} agent(s) started, ${r.commands} comment(s) passed on`);
+    });
+  trig
+    .command('set')
+    .description('Change triggers')
+    .option('--github <on|off>', 'start agents for labeled issues')
+    .option('--label <label>', 'the label (default agentmgr)')
+    .option('--repos <list>', 'repos to watch, owner/name, comma separated')
+    .option('--owners <list>', 'or every repo of these owners')
+    .option('--every <minutes>', 'how often to check')
+    .option('--pr-comments <on|off>', 'pass /agent comments on agent PRs to the agent')
+    .option('--webhook <on|off>', 'accept POST /api/hooks/agents with the token')
+    .option('--new-token', 'make a new webhook token (printed once)')
+    .option('--max-per-day <n>', 'agents triggers may start a day')
+    .action(async (o) => {
+      await daemon();
+      const onOff = (v) => (v === undefined ? undefined : ['on', 'true', 'yes', '1'].includes(String(v).toLowerCase()));
+      const clean = (x) => Object.fromEntries(Object.entries(x).filter(([, v]) => v !== undefined));
+      const patch = clean({
+        github: clean({ enabled: onOff(o.github), label: o.label, repos: o.repos, owners: o.owners, everyMin: o.every === undefined ? undefined : Number(o.every) }),
+        prCommands: clean({ enabled: onOff(o.prComments) }),
+        webhook: clean({ enabled: o.newToken ? true : onOff(o.webhook), newToken: o.newToken ? true : undefined }),
+        maxPerDay: o.maxPerDay === undefined ? undefined : Number(o.maxPerDay),
+      });
+      const r = await api('PUT', '/triggers', patch);
+      if (r.token) console.log(`Webhook token (shown only now): ${r.token}\nPOST /api/hooks/agents with "Authorization: Bearer <token>" and {"intent": "…", "project": "<shortcut>"} or {"repo": "<git URL>"}`);
+      console.log(`${green('✓')} saved`);
+    });
+
+  const land = program.command('land').description("Agents' open pull requests: list them, update, ask to fix, merge");
+  land
+    .command('list', { isDefault: true })
+    .description('Open pull requests by what they need: ready, fix, behind, waiting, draft')
+    .action(async () => {
+      await daemon();
+      const { rows, settings } = await api('GET', '/landing');
+      const color = { ready: green, fix: red, behind: yellow, waiting: dim, draft: dim };
+      for (const r of rows) {
+        const c = r.pr.checks;
+        const checks = c ? { failed: red(`✗ ${c.failed.join(', ')}`), running: `◔ ${c.running}`, passed: green('✓'), none: '' }[c.state] : '';
+        console.log(`${(color[r.land] ?? dim)(r.land.padEnd(7))} P${r.agent.priority} ${bold(r.agent.name)}  #${r.pr.number ?? ''} ${r.pr.title ?? r.pr.url}  ${checks}${r.pr.review ? `  ${r.pr.review.toLowerCase().replace(/_/g, ' ')}` : ''}${r.fixes ? dim(`  sent back ${r.fixes}x`) : ''}`);
+      }
+      if (!rows.length) console.log(dim('No open pull requests from agents.'));
+      console.log(dim(`Failing checks ${settings.fixChecks ? 'are' : 'are not'} sent to agents, requested changes ${settings.fixReviews ? 'are' : 'are not'}, at most ${settings.maxFixes} times per PR; merges use ${settings.mergeMethod}.`));
+    });
+  land
+    .command('update')
+    .description('Merge the base branch into the agent branch and push (asks the agent when busy, dirty or conflicting)')
+    .argument('<agent>')
+    .option('--agent', 'ask the agent to do it')
+    .action(async (ref, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const r = await api('POST', `/agents/${a.id}/land/update`, { via: opts.agent ? 'agent' : 'auto' });
+      console.log(r.upToDate ? `Up to date with ${r.target}` : r.merged ? `${green('✓')} merged ${r.merged} commit(s) from ${r.target}${r.pushed ? ' and pushed' : ''}` : `Asked ${bold(a.name)} to update (${r.why})`);
+    });
+  land
+    .command('fix')
+    .description("Send the PR's failing checks, requested changes or conflicts to the agent")
+    .argument('<agent>')
+    .action(async (ref) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      await api('POST', `/agents/${a.id}/land/fix`, {});
+      console.log(`${green('✓')} sent to ${bold(a.name)}`);
+    });
+  land
+    .command('merge')
+    .description("Merge the agent's open pull request with gh")
+    .argument('<agent>')
+    .option('--method <m>', 'squash, merge or rebase (default from settings)')
+    .option('--auto', 'turn on auto-merge instead: GitHub merges once checks and reviews allow')
+    .action(async (ref, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const r = await api('POST', `/agents/${a.id}/land/merge`, { method: opts.method, auto: Boolean(opts.auto) });
+      console.log(`${green('✓')} ${r.auto ? 'auto-merge on for' : 'merged'} ${r.url}`);
+    });
+  land
+    .command('set')
+    .description('Landing settings')
+    .option('--fix-checks <on|off>', 'send failing checks to the agent')
+    .option('--fix-reviews <on|off>', 'send requested changes to the agent')
+    .option('--max-fixes <n>', 'at most this many times per pull request')
+    .option('--method <m>', 'merge method: squash, merge or rebase')
+    .option('--delete-branch <on|off>', 'delete the branch on GitHub after merging')
+    .action(async (opts) => {
+      await daemon();
+      const onOff = (v) => (v === undefined ? undefined : ['on', 'true', 'yes', '1'].includes(String(v).toLowerCase()));
+      const patch = Object.fromEntries(
+        [['fixChecks', onOff(opts.fixChecks)], ['fixReviews', onOff(opts.fixReviews)], ['maxFixes', opts.maxFixes === undefined ? undefined : Number(opts.maxFixes)], ['mergeMethod', opts.method], ['deleteBranch', onOff(opts.deleteBranch)]].filter(([, v]) => v !== undefined),
+      );
+      const { settings } = await api('PUT', '/landing', patch);
+      console.log(JSON.stringify(settings, null, 2));
     });
 
   program
