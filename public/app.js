@@ -10,6 +10,8 @@ import { initTriggers } from '/triggers.js';
 import { initSpend } from '/spend.js';
 import { initPlaybooks } from '/playbooks.js';
 import { initSetup } from '/setup.js';
+import { initUpdate } from '/update.js';
+import { initMenu } from '/menu.js';
 
 const $ = (sel) => document.querySelector(sel);
 const agents = new Map();
@@ -103,6 +105,8 @@ const reviewUi = initReview({ api, esc, toast, agents, $ });
 const triggersUi = initTriggers({ api, esc, toast, $ });
 initSpend({ api, esc, toast, $ });
 initSetup({ api, esc, $ });
+const updateUi = initUpdate({ api, esc, toast, $ });
+initMenu({ api, esc, toast, $ });
 const playbooksUi = initPlaybooks({ api, esc, toast, $, select: (id) => (showTab('agents'), select(id)) });
 $('#new-playbook').onclick = () => {
   const f = $('#new-form');
@@ -622,7 +626,7 @@ const noRepo = (a) => a.kind === 'general' || a.kind === 'assistant';
 function agentItem(a) {
   const st = statusOf(a);
   const idle = !isActive(a);
-  return `<li data-id="${a.id}" class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''}">
+  return `<li data-id="${a.id}" ${a.kind === 'general' || a.kind === 'assistant' ? '' : 'draggable="true" '}class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''}">
     <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
     <div class="intent">${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${esc(a.intent || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
@@ -643,6 +647,13 @@ function agentItem(a) {
 }
 
 /** Agents grouped into projects, busiest and most urgent first. */
+// Dragging an agent onto another project moves it there (as Edit → Project does). The list
+// doesn't redraw mid-drag (updates arrive every few seconds), so the drag isn't lost.
+let dragging = null;
+let listStale = false;
+/** What a drop on this project sends as the agent's project: its shortcut, else its name. */
+const dropRef = (g) => (['assistant', 'general', 'other'].includes(g.key) ? '' : g.shortcut || g.name || '');
+
 function projectGroups(list) {
   const groups = new Map();
   for (const a of list) {
@@ -686,6 +697,7 @@ function projectGroups(list) {
 }
 
 function renderList() {
+  if (dragging) return void (listStale = true);
   const waiting = [...agents.values()].filter((a) => a.runtime.attention).length;
   document.title = waiting ? `(${waiting}) AI Agent Manager` : 'AI Agent Manager';
   // "@cc" shows one project; any other text also matches shortcuts.
@@ -727,7 +739,7 @@ function renderList() {
       const n = g.agents.length;
       // While filtering, show every match; otherwise respect collapsed projects.
       const open = filterText || !collapsed.has(g.key) || g.agents.some((a) => a.id === selectedId);
-      return `<li class="project ${open ? 'open' : ''}">
+      return `<li class="project ${open ? 'open' : ''}" data-key="${esc(g.key)}" data-move="${esc(dropRef(g))}">
         <button class="project-head" data-toggle="${esc(g.key)}" aria-expanded="${open}" title="${esc(g.full || g.name)}">
           <span class="caret">${open ? '▾' : '▸'}</span>
           ${g.shortcut ? `<span class="shortcut" data-rename="${esc(g.shortcut)}" title="Shortcut: type @${esc(g.shortcut)} to filter, or use it as the project when adding agents (click to rename)">${esc(g.shortcut)}</span>` : ''}
@@ -1603,6 +1615,7 @@ function renderDetail() {
         ${it.status === 'review' ? `<span class="spacer"></span><button class="small primary" data-backlog-accept="${it.id}">Accept</button> <button class="small" data-backlog-reopen="${it.id}">Reopen</button>` : ''}</div>`;
     })()}
     ${a.error ? `<div class="error-box">${esc(a.error)}</div>` : ''}
+    ${!running && a.closedBy === 'cap' ? `<p class="hint">Closed ${ago(a.closedAt)} to stay under the limit on open agents (Settings), as the one idle longest. Resume it any time${a.keep ? '' : ', or mark it Keep'}.</p>` : ''}
     ${!running && a.closedBy === 'cleanup' ? `<p class="hint">Closed by clean up ${ago(a.closedAt)}, after a while with no activity. Resume it any time${a.keep ? '' : ', or mark it Keep'}.</p>` : ''}
     ${a.status === 'preparing'
       ? `<div class="progress-box">
@@ -2842,6 +2855,63 @@ $('#agent-list').addEventListener('click', (e) => {
   if (li) select(li.dataset.id);
 });
 
+const dropTarget = (e) => {
+  const li = e.target.closest?.('li.project[data-move]');
+  const a = dragging && agents.get(dragging);
+  return li && li.dataset.move && a && (a.projectInfo?.key ?? 'other') !== li.dataset.key ? li : null;
+};
+const clearDrop = () => document.querySelectorAll('li.project.drop-target').forEach((x) => x.classList.remove('drop-target'));
+$('#agent-list').addEventListener('dragstart', (e) => {
+  const li = e.target.closest?.('li[data-id][draggable="true"]');
+  if (!li) return;
+  dragging = li.dataset.id;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', agents.get(dragging)?.name ?? dragging);
+  li.classList.add('dragging');
+  document.body.classList.add('dragging-agent');
+});
+$('#agent-list').addEventListener('dragover', (e) => {
+  const li = dropTarget(e);
+  if (!li) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  if (!li.classList.contains('drop-target')) {
+    clearDrop();
+    li.classList.add('drop-target');
+  }
+});
+$('#agent-list').addEventListener('dragleave', (e) => {
+  const li = e.target.closest?.('li.project');
+  if (li && !li.contains(e.relatedTarget)) li.classList.remove('drop-target');
+});
+$('#agent-list').addEventListener('drop', (e) => {
+  const li = dropTarget(e);
+  if (!li) return;
+  e.preventDefault();
+  const a = agents.get(dragging);
+  const to = li.dataset.move;
+  const label = li.querySelector('.pname')?.textContent ?? to;
+  act(async () => upsert(await api('PATCH', `/agents/${a.id}`, { project: to })), `Moved ${a.name} to ${label}`);
+});
+document.addEventListener('dragend', () => {
+  if (!dragging) return;
+  dragging = null;
+  clearDrop();
+  document.body.classList.remove('dragging-agent');
+  document.querySelector('li.agent.dragging')?.classList.remove('dragging');
+  if (listStale) {
+    listStale = false;
+    renderList();
+  }
+});
+
+// The title goes home: the Agents tab with no agent open.
+$('#home-link').onclick = (e) => {
+  e.preventDefault();
+  showTab('agents');
+  select(null);
+};
+
 $('#detail-body').addEventListener('click', async (e) => {
   const a = agents.get(selectedId);
   if (!a) return;
@@ -3243,6 +3313,9 @@ $('#about-check').onclick = async () => {
   out.hidden = false;
   out.textContent = 'Checking…';
   try {
+    // On this computer the daemon can install it; from a phone, just say what is out.
+    const local = await updateUi.check().catch(() => null);
+    if (local) return void (out.innerHTML = local);
     const r = await api('GET', '/about/latest');
     out.innerHTML = r.newer
       ? `Version ${esc(r.latest)} is available. Update with <code>npm install -g ${esc(aboutInfo?.package ?? 'ai-agentmanager')}@latest</code>, then <code>agentmgr restart</code>.`

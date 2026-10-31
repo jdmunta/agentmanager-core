@@ -5,11 +5,15 @@
 // and "off". Never touched: agents marked Keep, agents still setting up or working, members of a
 // team that is still going, and, for deleting, agents with an open pull request or with work
 // that exists only in their worktree (uncommitted changes or commits on no other branch).
+// Optionally, a cap on open sessions ("maxRunning"): above it, the agents idle longest are closed
+// (they resume when opened), so the machine stays responsive. The same agents are left alone,
+// plus ones waiting for an answer and ones active in the last few minutes.
 import fs from 'node:fs';
 import * as git from './git.js';
 
 export const STRATEGIES = ['close-delete', 'close', 'manual', 'off'];
-export const CLEANUP_DEFAULTS = { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14 };
+export const CLEANUP_DEFAULTS = { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14, maxRunning: null };
+const CAP_GRACE_MS = 5 * 60_000;
 const DAY = 86_400_000;
 const TEAM_DONE = new Set(['done', 'stopped']);
 
@@ -24,6 +28,7 @@ export function cleanupSettings(config = {}) {
     strategy: STRATEGIES.includes(c.strategy) ? c.strategy : CLEANUP_DEFAULTS.strategy,
     closeAfterDays: n(c.closeAfterDays, CLEANUP_DEFAULTS.closeAfterDays),
     deleteAfterDays: n(c.deleteAfterDays, CLEANUP_DEFAULTS.deleteAfterDays),
+    maxRunning: Number(c.maxRunning) >= 1 ? Math.min(500, Math.floor(Number(c.maxRunning))) : null,
   };
 }
 
@@ -56,11 +61,70 @@ export class Cleanup {
     this.firstTimer.unref?.();
     this.timer = setInterval(() => this.sweep().catch((e) => this.log(`clean up: ${e.message}`)), (config.cleanupEveryMin ?? 360) * 60_000);
     this.timer.unref?.();
+    // The cap: checked soon after agents change (one starts) and every minute.
+    this.onChange = () => {
+      if (!this.settings.maxRunning || this.capSoon) return;
+      this.capSoon = setTimeout(() => {
+        this.capSoon = null;
+        this.enforceCap().catch((e) => this.log(`cap: ${e.message}`));
+      }, config.capDelayMs ?? 5000);
+      this.capSoon.unref?.();
+    };
+    manager.on?.('change', this.onChange);
+    this.capTimer = setInterval(() => this.enforceCap().catch((e) => this.log(`cap: ${e.message}`)), 60_000);
+    this.capTimer.unref?.();
   }
 
   close() {
     clearTimeout(this.firstTimer);
     clearInterval(this.timer);
+    clearTimeout(this.capSoon);
+    clearInterval(this.capTimer);
+    this.manager.off?.('change', this.onChange);
+  }
+
+  /** Open sessions that count toward the cap (not the assistant's). */
+  runningAgents() {
+    return this.store.list().filter((a) => a.kind !== 'assistant' && this.manager.runtimes.get(a.id)?.pty);
+  }
+
+  /** Which agents to close to get back under the cap: idle longest first, protected ones skipped. */
+  capPlan(now = Date.now()) {
+    const max = this.settings.maxRunning;
+    const running = this.runningAgents();
+    if (!max || running.length <= max) return { max, running: running.length, close: [] };
+    const activeAt = (a) => Date.parse(this.manager.activeAt(a, this.manager.runtimes.get(a.id)) ?? a.createdAt) || now;
+    const closable = running
+      .filter((a) => !this.protectedBy(a) && !this.manager.runtimes.get(a.id)?.attention && now - activeAt(a) >= (this.config.capGraceMs ?? CAP_GRACE_MS))
+      .sort((x, y) => activeAt(x) - activeAt(y));
+    return { max, running: running.length, close: closable.slice(0, running.length - max).map((a) => ({ id: a.id, name: a.name, idleMin: Math.floor((now - activeAt(a)) / 60_000) })) };
+  }
+
+  async enforceCap() {
+    if (this.capping) return null;
+    const plan = this.capPlan();
+    if (!plan.close.length) return null;
+    this.capping = true;
+    const closed = [];
+    try {
+      for (const row of plan.close) {
+        try {
+          await this.manager.stop(row.id);
+          this.manager.patch(row.id, { closedBy: 'cap' });
+          closed.push(row);
+        } catch (e) {
+          this.log(`cap: couldn't close ${row.name}: ${e.message}`);
+        }
+      }
+    } finally {
+      this.capping = false;
+    }
+    if (closed.length) {
+      this.log(`cap: ${plan.running} open, limit ${plan.max}; closed ${closed.map((r) => `${r.name} (idle ${r.idleMin} min)`).join(', ')}`);
+      this.store.data.cleanup.lastCap = { at: new Date().toISOString(), closed };
+      this.store.save();
+    }
+    return closed;
   }
 
   get settings() {
@@ -73,8 +137,13 @@ export class Cleanup {
     for (const k of ['closeAfterDays', 'deleteAfterDays']) {
       if (patch[k] !== undefined && !(Number(patch[k]) >= 1)) throw err(400, `${k} must be 1 or more`);
     }
+    // maxRunning: a number of open sessions, or empty/null/0 for no cap.
+    if (patch.maxRunning !== undefined && patch.maxRunning !== null && patch.maxRunning !== '' && Number(patch.maxRunning) !== 0 && !(Number(patch.maxRunning) >= 1)) {
+      throw err(400, 'maxRunning must be 1 or more, or empty for no cap');
+    }
     const next = cleanupSettings({ cleanup: { ...this.config.cleanup, ...patch } });
     this.config.cleanup = next;
+    if (next.maxRunning) this.onChange?.();
     return next;
   }
 
@@ -181,6 +250,6 @@ export class Cleanup {
 
   async status() {
     const s = this.settings;
-    return { ...s, ...(await this.plan()), lastRun: this.store.data.cleanup.lastRun ?? null };
+    return { ...s, ...(await this.plan()), running: this.runningAgents().length, lastRun: this.store.data.cleanup.lastRun ?? null, lastCap: this.store.data.cleanup.lastCap ?? null };
   }
 }

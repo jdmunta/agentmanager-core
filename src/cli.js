@@ -1346,9 +1346,11 @@ export async function main(argv) {
     .option('--strategy <s>', 'close-delete (both automatically), close (close automatically, delete by hand), manual, or off')
     .option('--close-after <days>', 'close sessions idle this many days')
     .option('--delete-after <days>', 'delete agents closed this many days')
+    .option('--max-open <n>', 'keep at most this many agents open; the ones idle longest are closed above it ("off": no limit)')
     .action(async (opts) => {
       await daemon();
       const patch = {
+        ...(opts.maxOpen ? { maxRunning: /^(off|none|0)$/i.test(opts.maxOpen) ? null : Number(opts.maxOpen) } : {}),
         ...(opts.strategy ? { strategy: opts.strategy } : {}),
         ...(opts.closeAfter ? { closeAfterDays: Number(opts.closeAfter) } : {}),
         ...(opts.deleteAfter ? { deleteAfterDays: Number(opts.deleteAfter) } : {}),
@@ -1365,6 +1367,8 @@ export async function main(argv) {
       const c = await api('GET', '/cleanup');
       const what = { 'close-delete': 'closes and deletes automatically', close: 'closes automatically; delete with --run', manual: 'nothing automatic; use --run', off: 'off' }[c.strategy];
       console.log(`${bold('Clean up')}: ${c.strategy} (${what}) · close after ${c.closeAfterDays} days idle · delete ${c.deleteAfterDays} days after closing`);
+      console.log(`${bold('Open agents')}: ${c.running} open · ${c.maxRunning ? `at most ${c.maxRunning} (the ones idle longest close above it)` : 'no limit (set one: --max-open <n>)'}`);
+      if (c.lastCap) console.log(dim(`  last closed for the limit ${new Date(c.lastCap.at).toLocaleString()}: ${c.lastCap.closed.map((x) => x.name).join(', ')}`));
       const rows = [
         ...c.close.map((x) => [yellow('close'), x.name, `idle ${x.idleDays}d`, '']),
         ...c.delete.map((x) => [red('delete'), x.name, `closed ${x.closedDays}d`, '']),
@@ -2036,6 +2040,32 @@ export async function main(argv) {
       if (!(await back())) throw new Error('Daemon did not come back; check the log');
       const agents = await api('GET', '/agents');
       console.log(`${green('✓')} restarted${st.loaded ? ' (login service)' : ''}; ${agents.filter((a) => a.desired === 'running').length} agents set to resume`);
+    });
+
+  program
+    .command('update')
+    .description('Install the newest release and restart onto it (agents resume); a git checkout moves to the newest release tag')
+    .option('--check', 'only say whether a newer release exists')
+    .option('--auto-check <on|off>', 'whether the daemon checks for a new release twice a day (shown in the app)')
+    .action(async (opts) => {
+      const up = await import('./update.js');
+      if (opts.autoCheck) {
+        const on = /^(on|true|yes|1)$/i.test(opts.autoCheck);
+        if ((await health())?.pid) await api('PUT', '/update', { check: on });
+        else (await import('./config.js')).saveConfig({ updates: { check: on } });
+        return console.log(`Update checks ${on ? green('on') : dim('off')}`);
+      }
+      const info = await up.checkUpdate();
+      if (!info.newer) return console.log(`${green('✓')} ${info.current} is the newest release`);
+      if (info.blocker) throw new Error(`${info.latest} is available, but: ${info.blocker}`);
+      if (opts.check) return console.log(`${yellow(info.latest)} is available (you have ${info.current}); install it: agentmgr update`);
+      const r = await up.installUpdate({ log: (m) => console.log(dim(m)) });
+      console.log(`${green('✓')} installed ${r.to} (was ${r.from})`);
+      if (!(await health())) return console.log(dim('The daemon is not running; it starts on the new version next time'));
+      // The new version's own restart, not the copy of it loaded in this process.
+      const { spawnSync } = await import('node:child_process');
+      const res = spawnSync(process.execPath, [process.argv[1], 'restart'], { stdio: 'inherit' });
+      if (res.status !== 0) process.exitCode = res.status ?? 1;
     });
 
   program

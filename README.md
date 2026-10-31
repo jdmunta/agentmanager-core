@@ -104,7 +104,7 @@ npm install
 npm link
 ```
 
-**Updating.** Use the command for how you installed, then run `agentmgr restart`. Running agents pause briefly and resume.
+**Updating.** `agentmgr update` installs the newest release and restarts onto it; running agents pause briefly and resume. In the app, **Update to …** appears in the top bar when a release is out (checked twice a day; turn it off in **☰ → Settings** or with `agentmgr update --auto-check off`), and **About → Update and restart** does the same. A clone at a release tag (or one you `npm link`ed) moves to the newest tag; a clone on a branch or with uncommitted changes is left alone. By hand, use the command for how you installed, then `agentmgr restart`:
 
 | Installed with | Update |
 | --- | --- |
@@ -480,7 +480,7 @@ The sidebar groups agents into projects, shown as a tree:
 
 **Edit** on an agent changes its name, its request, priority, permission mode and model. Changing the request updates what AI Agent Manager records (and tracks any new Jira links); tick **Also tell the agent** to send it to the session as well. Permission mode and model apply from its next launch.
 
-To list an agent under another project, use **✎ Move** next to its project (or the Edit dialog) and pick a known project, a new project name, or **Its own repo or folder** to move it back. Only the grouping changes: its code stays in its own worktree and branch.
+To list an agent under another project, drag it onto that project in the list, or use **✎ Move** next to its project (or the Edit dialog) and pick a known project, a new project name, or **Its own repo or folder** to move it back. Only the grouping changes: its code stays in its own worktree and branch.
 
 ```bash
 agentmgr edit 3fa2b1 --name login-timeout --priority P1 --intent "Fix the login timeout on slow networks" --tell
@@ -869,6 +869,8 @@ agentmgr cleanup --strategy close-delete --close-after 14 --delete-after 14
 ```
 
 Agents closed before clean up was turned on count as closed from the first check, so nothing is deleted the day you turn it on.
+
+**A limit on open agents.** Many open sessions slow the machine down. In **☰ → Settings** (or `agentmgr cleanup --max-open 12`), set how many agents may be open at once: above it, the agents idle longest are closed, and they resume when you open them. Never closed for the limit: agents working, waiting for your answer, active in the last 5 minutes, marked **Keep**, or in a team that is still going. Off by default (`--max-open off`).
 
 ## Saving state: flush and restart
 

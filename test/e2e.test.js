@@ -34,6 +34,10 @@ fs.writeFileSync(
     handoffIdleSec: 1,
     // The AI judge is turned on only by its own test, so other tests see the rule-based results.
     judge: { enabled: false },
+    // No release checks against GitHub; the cap acts at once (its own test sets a limit).
+    updates: { check: false },
+    capGraceMs: 0,
+    capDelayMs: 200,
     shell: '/bin/sh',
     // Containers and Linux CI can't start Chrome's sandbox.
     ...(process.env.AGENTMGR_TEST_NO_SANDBOX === '1' ? { browserNoSandbox: true } : {}),
@@ -1989,7 +1993,7 @@ test('clean up: closes idle agents, deletes long-closed ones, keeps Keep and uns
     assert.equal((await call('PUT', '/cleanup', { closeAfterDays: 0 })).status, 400);
     const saved = (await call('PUT', '/cleanup', { strategy: 'manual', closeAfterDays: 10, deleteAfterDays: 7 })).body;
     assert.equal(saved.strategy, 'manual');
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).cleanup, { strategy: 'manual', closeAfterDays: 10, deleteAfterDays: 7 });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).cleanup, { strategy: 'manual', closeAfterDays: 10, deleteAfterDays: 7, maxRunning: null });
     await call('PATCH', `/agents/${b.id}`, { keep: true });
 
     // Agents still working are left alone; these finish their first turn.
@@ -3389,4 +3393,41 @@ test('About: version, release date, author, license, links and this daemon', asy
   assert.match(a.links.repository, /^https:\/\/github\.com\//);
   assert.equal(a.daemon.pid > 0, true);
   assert.ok(a.daemon.home);
+});
+
+test('settings: who this runs as, release checks, and a cap on open agents', async () => {
+  const me = (await call('GET', '/me')).body;
+  assert.ok(me.display);
+  assert.equal(me.remote, false);
+  assert.ok('claude' in me && 'git' in me && 'email' in me);
+
+  // Release checks are off in this config; turning them on is kept, and off again.
+  assert.equal((await call('GET', '/update')).body.check, false);
+  assert.equal((await call('PUT', '/update', { check: true })).body.check, true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).updates.check, true);
+  assert.equal((await call('PUT', '/update', { check: false })).body.check, false);
+
+  // The cap: validated, kept, and acted on (idle longest first; this config has no grace period).
+  const repo = path.join(home, 'cap-repo');
+  fs.mkdirSync(repo);
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+  execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: repo });
+  const made = (await call('POST', '/agents', { intents: ['Cap one', 'Cap two'], dir: repo })).body;
+  for (const a of made) await waitFor(async () => (await agentNow(a.id)).runtime?.running, 15000, 'running');
+  assert.equal((await call('PUT', '/cleanup', { maxRunning: -1 })).status, 400);
+  const open = (await call('GET', '/cleanup')).body.running;
+  assert.ok(open >= 2);
+  try {
+    const set = (await call('PUT', '/cleanup', { maxRunning: open - 1 })).body;
+    assert.equal(set.maxRunning, open - 1);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).cleanup.maxRunning, open - 1);
+    const cap = await waitFor(async () => (await call('GET', '/cleanup')).body.lastCap, 15000, 'an agent closed for the cap');
+    assert.ok(cap.closed.length >= 1);
+    const closed = await agentNow(cap.closed[0].id);
+    assert.equal(closed.closedBy, 'cap');
+    assert.equal(closed.runtime.running, false);
+    assert.ok((await call('GET', '/cleanup')).body.running <= open - 1);
+  } finally {
+    assert.equal((await call('PUT', '/cleanup', { maxRunning: null })).body.maxRunning, null);
+  }
 });
