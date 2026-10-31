@@ -15,20 +15,35 @@
   <body>
     <header class="topbar">
       <div class="brand">
-        <span class="logo" aria-hidden="true">◆</span>
-        <h1>AI Agent Manager</h1>
+        <a href="#" id="home-link" class="home-link" title="Home: all agents"><span class="logo" aria-hidden="true">◆</span><h1>AI Agent Manager</h1></a>
         <button id="about-btn" class="about-btn" type="button" title="About AI Agent Manager: version, release, links">About</button>
+        <button id="update-btn" class="update-btn local-only" type="button" hidden></button>
         <span id="conn" class="conn" title="Daemon connection">connecting…</span>
       </div>
       <div class="top-actions">
         <input id="filter" type="search" placeholder="Filter agents" aria-label="Filter agents" />
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
         <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
-        <button id="cleanup-btn" title="Close agents idle for a while, and delete old closed ones">Clean up</button>
-        <button id="alerts-btn" class="local-only" title="Slack alerts when an agent needs you">Alerts</button>
-        <button id="remote-btn" class="local-only" title="Open AI Agent Manager from your phone">Remote access</button>
         <button id="ask-btn" title="A general Claude session with no repo or folder">Ask Claude</button>
         <button id="new-btn" class="primary">+ New agents</button>
+        <div class="menu-wrap">
+          <button id="menu-btn" class="menu-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Settings and preferences">
+            <span id="me-avatar" class="avatar" aria-hidden="true">·</span><span id="me-name" class="me-name"></span><span class="burger" aria-hidden="true">☰</span>
+          </button>
+          <div id="menu" class="menu" role="menu" hidden>
+            <div class="menu-me">
+              <b id="me-display"></b>
+              <span id="me-email" class="hint"></span>
+              <span id="me-where" class="hint"></span>
+            </div>
+            <button role="menuitem" id="settings-btn">Settings…</button>
+            <button role="menuitem" id="cleanup-btn" title="Close agents idle for a while, and delete old closed ones">Clean up…</button>
+            <button role="menuitem" id="alerts-btn" class="local-only" title="Slack alerts when an agent needs you">Alerts…</button>
+            <button role="menuitem" id="remote-btn" class="local-only" title="Open AI Agent Manager from your phone">Remote access…</button>
+            <div class="menu-sep"></div>
+            <button role="menuitem" id="menu-about">About and updates…</button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -639,9 +654,36 @@
       <dl id="about-list" class="about-list"></dl>
       <p id="about-update" class="hint" hidden></p>
       <div class="dialog-actions">
-        <button type="button" id="about-check" class="ghost" title="Asks the npm registry for the newest version">Check for updates</button>
+        <label class="about-auto local-only" title="Twice a day, ask for the newest release (GitHub for a git checkout, npm otherwise)"><input type="checkbox" id="about-auto" /> Check automatically</label>
+        <button type="button" id="about-check" class="ghost" title="Asks for the newest release">Check for updates</button>
+        <button type="button" id="about-install" class="primary local-only" hidden>Update and restart</button>
         <button type="button" id="about-close" class="primary">Close</button>
       </div>
+    </dialog>
+
+    <dialog id="settings-dialog" class="settings-dialog">
+      <form id="settings-form" method="dialog" class="alerts-body">
+        <h2>Settings</h2>
+        <fieldset>
+          <legend>Open agents</legend>
+          <label class="check">Keep at most <input type="number" name="maxRunning" min="1" max="500" placeholder="no limit" class="num" /> agents open at once</label>
+          <p class="hint">Above it, the agents idle longest are closed (they resume when you open them), so the machine stays responsive. Never closed: agents working, waiting for your answer, active in the last 5 minutes, marked Keep, or in a team that is still going. <span id="settings-running"></span></p>
+        </fieldset>
+        <fieldset class="local-only">
+          <legend>Updates</legend>
+          <label class="check"><input type="checkbox" name="updateCheck" /> Check for a new release twice a day</label>
+          <p class="hint">Shows <b>Update to …</b> in the top bar; one click installs it and restarts, and running agents resume.</p>
+        </fieldset>
+        <fieldset>
+          <legend>More</legend>
+          <p class="hint settings-links"><button type="button" class="link" data-open="cleanup-btn">Clean up old agents</button> · <button type="button" class="link" data-open="spend-btn">Spend and budgets</button> · <button type="button" class="link local-only" data-open="alerts-btn">Slack alerts</button> · <button type="button" class="link local-only" data-open="remote-btn">Remote access</button></p>
+        </fieldset>
+        <p id="settings-error" class="error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" id="settings-cancel" class="ghost">Cancel</button>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
     </dialog>
 
     <script type="module" src="/app.js"></script>

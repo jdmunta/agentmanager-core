@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,7 +18,9 @@ import { passEnv, plist, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
-import { cleanupSettings } from '../src/cleanup.js';
+import { Cleanup, cleanupSettings } from '../src/cleanup.js';
+import { checkUpdate, gitBlocker, installUpdate, newestTag } from '../src/update.js';
+import { claudeAccount } from '../src/identity.js';
 import { commentsMessage, parseBaseRef, prBase } from '../src/review.js';
 import { parseDiff } from '../public/review.js';
 import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
@@ -732,9 +735,9 @@ test('team lead: sub-agents per role, and the steps it runs', () => {
 });
 
 test('clean up settings: defaults and bounds', () => {
-  assert.deepEqual(cleanupSettings({}), { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14 });
-  assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'close-delete', closeAfterDays: '7' } }), { strategy: 'close-delete', closeAfterDays: 7, deleteAfterDays: 14 });
-  assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'nuke', closeAfterDays: 0, deleteAfterDays: -3 } }), { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14 });
+  assert.deepEqual(cleanupSettings({}), { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14, maxRunning: null });
+  assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'close-delete', closeAfterDays: '7' } }), { strategy: 'close-delete', closeAfterDays: 7, deleteAfterDays: 14, maxRunning: null });
+  assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'nuke', closeAfterDays: 0, deleteAfterDays: -3 } }), { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14, maxRunning: null });
 });
 
 test('assistantSettings: defaults, bounds and known sources only', async () => {
@@ -908,4 +911,77 @@ test('a pull request check asked for during one in progress runs again, once for
   assert.equal(runs.length, 2);
   assert.equal(fake.refreshing.size, 0);
   assert.equal(await refresh({ withPrs: true }), 3, 'and the next one starts afresh');
+});
+
+test('open-agent cap: idle longest closed first, protected and recent ones skipped', () => {
+  const min = 60_000;
+  const now = Date.parse('2026-10-31T12:00:00Z');
+  const at = (m) => new Date(now - m * min).toISOString();
+  const agents = [
+    { id: 'a', name: 'old', createdAt: at(300), last: at(120) },
+    { id: 'b', name: 'older', createdAt: at(300), last: at(200) },
+    { id: 'c', name: 'kept', createdAt: at(300), last: at(500), keep: true },
+    { id: 'd', name: 'asking', createdAt: at(300), last: at(400) },
+    { id: 'e', name: 'fresh', createdAt: at(300), last: at(2) },
+    { id: 'f', name: 'closed', createdAt: at(300), last: at(900) },
+    { id: 'g', name: 'assistant', kind: 'assistant', createdAt: at(300), last: at(999) },
+  ];
+  const runtimes = new Map(agents.filter((a) => a.id !== 'f').map((a) => [a.id, { pty: {}, attention: a.id === 'd' ? 'Permission' : null }]));
+  const manager = { runtimes, activeAt: (a) => a.last };
+  const store = { data: {}, list: () => agents };
+  const c = new Cleanup({ manager, store, config: { cleanup: { maxRunning: 3 } } });
+  c.close();
+  const plan = c.capPlan(now);
+  assert.equal(plan.running, 5, 'the assistant and closed agents do not count');
+  assert.deepEqual(plan.close.map((r) => r.name), ['older', 'old']);
+  assert.equal(plan.close[0].idleMin, 200);
+  c.config.cleanup.maxRunning = 4;
+  assert.deepEqual(c.capPlan(now).close.map((r) => r.name), ['older']);
+  c.config.cleanup.maxRunning = null;
+  assert.deepEqual(c.capPlan(now).close, []);
+  assert.equal(cleanupSettings({ cleanup: { maxRunning: '8' } }).maxRunning, 8);
+  assert.equal(cleanupSettings({ cleanup: { maxRunning: 0 } }).maxRunning, null);
+  assert.throws(() => c.update({ maxRunning: -2 }), /maxRunning/);
+  assert.equal(c.update({ maxRunning: '' }).maxRunning, null);
+});
+
+test('self update: newest release tag, blockers, and moving a checkout to it', async () => {
+  assert.equal(newestTag(['v1.2.0', 'v1.10.0', 'v1.9.3', 'v2.0.0-rc.1', 'latest', '']), 'v1.10.0');
+  assert.equal(newestTag(['nope']), null);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'am-update-'));
+  const g = (cwd, ...args) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', ...args], { cwd }).toString().trim();
+  const origin = path.join(dir, 'origin');
+  fs.mkdirSync(origin);
+  g(origin, 'init', '-q', '-b', 'main');
+  for (const v of ['1.0.0', '1.1.0']) {
+    fs.writeFileSync(path.join(origin, 'package.json'), JSON.stringify({ name: 'x', version: v }));
+    g(origin, 'add', '.');
+    g(origin, 'commit', '-q', '-m', v);
+    g(origin, 'tag', `v${v}`);
+  }
+  const copy = path.join(dir, 'copy');
+  g(dir, 'clone', '-q', origin, copy);
+  fs.mkdirSync(path.join(copy, 'node_modules'));
+  assert.match(await gitBlocker(copy), /branch "main"/);
+  g(copy, 'checkout', '-q', '--detach', 'v1.0.0');
+  assert.equal(await gitBlocker(copy), null);
+  const info = await checkUpdate({ dir: copy });
+  assert.deepEqual([info.kind, info.current, info.latest, info.newer, info.blocker], ['git', '1.0.0', '1.1.0', true, null]);
+  fs.writeFileSync(path.join(copy, 'package.json'), '{"name":"x","version":"1.0.0","dirty":true}');
+  await assert.rejects(installUpdate({ dir: copy }), /uncommitted changes/);
+  g(copy, 'checkout', '-q', '--', 'package.json');
+  const r = await installUpdate({ dir: copy });
+  assert.deepEqual([r.from, r.to], ['1.0.0', '1.1.0']);
+  assert.equal(g(copy, 'describe', '--tags'), 'v1.1.0');
+  assert.deepEqual(await installUpdate({ dir: copy }), { upToDate: true, current: '1.1.0' });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('identity: the Claude account from its settings file, nothing else', () => {
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'am-id-')), 'claude.json');
+  fs.writeFileSync(f, JSON.stringify({ oauthAccount: { emailAddress: 'a@b.c', displayName: 'Ann', organizationName: 'Org', accountUuid: 'secret-ish' } }));
+  assert.deepEqual(claudeAccount(f), { email: 'a@b.c', name: 'Ann', organization: 'Org' });
+  fs.writeFileSync(f, '{}');
+  assert.equal(claudeAccount(f), null);
+  assert.equal(claudeAccount(`${f}.missing`), null);
 });

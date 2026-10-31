@@ -18,6 +18,8 @@ import { Landing } from './landing.js';
 import { Budgets } from './budgets.js';
 import { stats } from './stats.js';
 import { Playbooks } from './playbooks.js';
+import { Updates } from './update.js';
+import { identity } from './identity.js';
 import { Memory } from './memory.js';
 import { doctor } from './doctor.js';
 import { Triggers, tokenMatches } from './triggers.js';
@@ -55,7 +57,7 @@ function isAllowedOrigin(origin, port) {
 }
 
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|shutdown$)/;
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|update(\/|$)|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
 
@@ -87,6 +89,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const budgets = new Budgets({ manager, store, config, notifier });
   const playbooks = new Playbooks({ manager, store });
   const memory = new Memory({ manager, config });
+  const updates = new Updates({ config });
   let remoteServer = null;
   let remotePort = null;
   // Live browser tabs: what a page does is saved on the agent's tab; popups become new tabs.
@@ -409,6 +412,18 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/agents/:id/review/ack', wrap((req) => manager.ackReview(req.params.id, req.body?.action)));
   api.get('/about', wrap(() => about({ port, config: { home: paths.home, claudeBin: config.claudeBin } })));
   api.get('/about/latest', wrap(() => latestRelease()));
+  api.get('/me', wrap(async (req) => ({ ...(await identity()), remote: Boolean(req.remote) })));
+  // Updating runs npm or git here and restarts the daemon, so only from this computer.
+  api.get('/update', wrap(() => updates.status()));
+  api.post('/update/check', wrap(async () => (await updates.refresh(), updates.status())));
+  api.post('/update', wrap(() => updates.apply()));
+  api.put(
+    '/update',
+    wrap((req) => {
+      saveConfig({ updates: updates.setCheck(req.body?.check !== false) });
+      return updates.status();
+    }),
+  );
   api.get('/judge', wrap(() => manager.judge.status()));
   // On or off for this daemon, kept in config.json. The judge spends calls on your own engine plan.
   api.put('/judge', wrap((req) => {
@@ -854,6 +869,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     triggers.close();
     budgets.close();
     playbooks.close();
+    updates.close();
     assistant.close();
     console.log(`[agentmgr] shutting down (${reason}); closing agents so their sessions are saved`);
     await manager.stopAll({ final: true });
